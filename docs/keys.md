@@ -77,7 +77,7 @@ ownership scope are cleared. Startup still uses the configured default resource.
 | `:skin`                                                      | switch the color skin live (`:skin gruvbox-dark` applies directly)                                                                                                                   |
 | `:reload` / `:config` / `:info`                              | reload config from disk · config sources + warnings · runtime diagnostics                                                                                                            |
 | `l` / `p`                                                    | logs (marked pods, or current row; workload = all matching pods) / previous-container logs                                                                                           |
-| `L` / `:vlogs`                                               | VictoriaLogs history for the selection (pod, container, workload, service, namespace)                                                                                                |
+| `L` / `:cloudlogs`                                           | open the GKE Logs Explorer for the selection (pod, container, workload, CronJob, service, namespace, node)                                                                           |
 | `c`                                                          | copy resource name to clipboard                                                                                                                                                      |
 | `Y`                                                          | copy any cell of the selected row: picker over the displayed columns (type to match a column name or value), `⏎` copies                                                              |
 | `e`                                                          | edit in `$EDITOR` (`kubectl edit`)                                                                                                                                                   |
@@ -162,8 +162,7 @@ point instead. See [PVC explore](features.md#pvc-explore).
 `/` filter (substring · `/regex/` · `!invert`) · `s`/`f` autoscroll · `w` wrap ·
 `J` JSON formatting · `Ctrl+Z` warning/error filter · `m` visual marker · `t` timestamps · `x` stop/resume stream · `z` clear buffer · `c` copy buffer ·
 `ctrl-s` save to file · `F` fullscreen (no chrome, clean text selection) ·
-`0`–`5` time anchors (tail · 1m · 5m · 15m · 30m · 1h) · `T` custom lookback (`s`/`m`/`h`/`d`, or `tail` for kubelet logs)
-(VictoriaLogs views) · `esc` back. The newest line anchors to the bottom of the
+`0`–`5` time anchors (tail · 1m · 5m · 15m · 30m · 1h) · `T` custom lookback (`s`/`m`/`h`/`d`, or `tail`) · `esc` back. The newest line anchors to the bottom of the
 viewport.
 
 `t` shows or hides timestamps in the current buffer without restarting the

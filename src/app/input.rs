@@ -461,8 +461,7 @@ impl App {
             }
             (Some(Action::Events), _) => self.open_events(),
             (Some(Action::Logs), _) => self.open_logs(),
-            // Logs from the configured external provider ([providers.logs]).
-            (Some(Action::ProviderLogs), _) => self.open_provider_logs(),
+            (Some(Action::CloudLogs), _) => self.open_cloud_logs(),
             (Some(Action::PreviousLogs), _) => self.open_previous_logs(),
             (Some(Action::Edit), _) => self.request_edit(),
             // k9s: `s` = shell on pods, scale on scalable workloads.
@@ -843,7 +842,7 @@ impl App {
             PaletteAction::Diff => self.open_diff(),
             PaletteAction::Events => self.switch_kind("events.events.k8s.io"),
             PaletteAction::PortForwards => self.open_port_forwards(),
-            PaletteAction::ProviderLogs => self.open_provider_logs(),
+            PaletteAction::CloudLogs => self.open_cloud_logs(),
             PaletteAction::Skin => self.open_skins(),
             PaletteAction::Helm => self.open_helm_releases(),
             PaletteAction::Notify => self.toggle_notify(),
@@ -1403,21 +1402,14 @@ impl App {
                 return;
             }
             (Some(Action::Lookback), _) => {
-                self.prompt_label = if self.provider_logs_active() {
-                    format!(
-                        "lookback period: e.g. 30m, 4h, 2d (current: {})",
-                        self.provider_lookback_label()
-                    )
-                } else {
-                    let current = self.logs.anchor_label().unwrap_or_else(|| {
-                        self.logs_cfg
-                            .since
-                            .clone()
-                            .filter(|_| self.log_tail_and_since().1.is_some())
-                            .unwrap_or_else(|| "tail".into())
-                    });
-                    format!("lookback: s/m/h/d or tail (current: {current})")
-                };
+                let current = self.logs.anchor_label().unwrap_or_else(|| {
+                    self.logs_cfg
+                        .since
+                        .clone()
+                        .filter(|_| self.log_tail_and_since().1.is_some())
+                        .unwrap_or_else(|| "tail".into())
+                });
+                self.prompt_label = format!("lookback: s/m/h/d or tail (current: {current})");
                 self.prompt_input.clear();
                 self.prompt_kind = Some(PromptKind::LogLookback);
                 self.mode = Mode::Prompt;

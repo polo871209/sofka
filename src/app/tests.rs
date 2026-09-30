@@ -10610,18 +10610,20 @@ async fn marked_pod_logs_skip_stale_and_hidden_marks() {
 }
 
 #[tokio::test]
-async fn marked_pod_logs_do_not_change_previous_or_provider_selection() {
+async fn marked_pod_logs_do_not_change_previous_or_cloud_logs_selection() {
     let (mut app, _rx) = marked_logs_app();
     app.handle_key(press(KeyCode::Char('p'))).unwrap();
     assert!(
         matches!(&app.logs.source, Some(LogSource::Single { ns, pod, previous: true, .. }) if ns == "gamma" && pod == "web")
     );
     app.handle_key(press(KeyCode::Esc)).unwrap();
-    install_provider(&mut app);
+    app.cluster.cluster_name = "gke_proj_us-central1_prod".into();
     app.handle_key(press(KeyCode::Char('L'))).unwrap();
-    assert!(matches!(&app.logs.source, Some(LogSource::Provider {
-        request: crate::providers::LogRequest::Pod { ns, pod, .. }
-    }) if ns == "gamma" && pod == "web"));
+    let url = app.opened_urls.last().expect("L opens cloud logs");
+    assert!(
+        url.contains("%22gamma%22") && url.contains("pod_name%3D%22web%22"),
+        "{url}"
+    );
 }
 
 #[tokio::test]
@@ -17773,199 +17775,155 @@ async fn reload_applies_dropin_files_and_config_view_lists_them() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-// ----- provider logs (VictoriaLogs) ------------------------------------
+// ----- cloud logs (GKE Logs Explorer) -----------------------------------
 
-fn install_provider(app: &mut App) {
-    let cfg = crate::config::LogProviderConfig {
-        kind: "victorialogs".into(),
-        // Unroutable on purpose: the spawned backfill task fails into the
-        // log buffer; these tests only assert on launch-time state.
-        url: "http://localhost:1".into(),
-        ..Default::default()
-    };
-    let (provider, warnings) = crate::providers::compile(Some(&cfg));
-    assert!(warnings.is_empty(), "{warnings:?}");
-    app.log_provider = provider;
+/// The decoded Logs Explorer query of a URL that `L` opened.
+fn cloud_query(url: &str) -> String {
+    let encoded = url
+        .split(";query=")
+        .nth(1)
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    form_urlencoded::parse(format!("q={encoded}").as_bytes())
+        .next()
+        .unwrap()
+        .1
+        .into_owned()
 }
 
 #[tokio::test]
-async fn provider_logs_from_pod_row() {
+async fn cloud_logs_open_for_workload_cronjob_namespace_and_node() {
     let (mut app, _rx) = test_app();
-    install_provider(&mut app);
-    app.switch_kind("pods");
-    apply(
-        &mut app,
-        json!({
-            "apiVersion": "v1", "kind": "Pod",
-            "metadata": {"name": "api-1", "namespace": "prod"},
-            "spec": {"containers": [{"name": "app"}, {"name": "istio"}]}
-        }),
-    );
-    app.table_state.select(Some(0));
-    app.handle_key(press(KeyCode::Char('L'))).unwrap();
-
-    assert_eq!(app.mode, Mode::Logs);
-    assert!(
-        app.logs.view.title.contains("victorialogs (1h)"),
-        "{}",
-        app.logs.view.title
-    );
-    match &app.logs.source {
-        Some(LogSource::Provider {
-            request:
-                crate::providers::LogRequest::Pod {
-                    ns,
-                    pod,
-                    container,
-                    multi_container,
-                },
-        }) => {
-            assert_eq!(ns, "prod");
-            assert_eq!(pod, "api-1");
-            assert!(container.is_none());
-            assert!(*multi_container);
-        }
-        other => panic!("unexpected source: {other:?}"),
-    }
-
-    // Provider lines ride the shared log channel/generation.
-    app.handle_msg(Msg::LogLines {
-        generation: app.log_gen,
-        lines: vec!["hello from vlogs".into()],
-    });
-    assert_eq!(app.logs.view.lines[0], "hello from vlogs");
-
-    // Esc returns without disturbing the table watch.
-    app.handle_key(press(KeyCode::Esc)).unwrap();
-    assert_eq!(app.mode, Mode::Table);
-}
-
-#[tokio::test]
-async fn provider_logs_discover_when_unconfigured() {
-    let (mut app, _rx) = test_app();
-    assert!(app.log_provider.is_none());
-    app.switch_kind("pods");
-    apply(
-        &mut app,
-        json!({
-            "apiVersion": "v1", "kind": "Pod",
-            "metadata": {"name": "api-1", "namespace": "prod"},
-            "spec": {"containers": [{"name": "app"}]}
-        }),
-    );
-    app.table_state.select(Some(0));
-
-    // No config: the view still opens (with default lookback in the title);
-    // the spawned task autodiscovers before querying.
-    app.handle_key(press(KeyCode::Char('L'))).unwrap();
-    assert_eq!(app.mode, Mode::Logs);
-    assert!(
-        app.logs.view.title.contains("victorialogs (1h)"),
-        "{}",
-        app.logs.view.title
-    );
-
-    // A successful discovery is reported back and cached for later presses…
-    let cfg = crate::config::LogProviderConfig {
-        kind: "victorialogs".into(),
-        url: "http://localhost:1".into(),
-        ..Default::default()
-    };
-    let discovered = crate::providers::compile(Some(&cfg)).0.unwrap();
-    app.handle_msg(Msg::LogProviderDiscovered {
-        generation: app.generation,
-        provider: Box::new(discovered),
-    });
-    assert!(app.log_provider.is_some());
-
-    // …but a stale discovery (older view generation, e.g. after a context
-    // switch) is dropped.
-    let (mut app2, _rx2) = test_app();
-    let cfg2 = crate::config::LogProviderConfig {
-        kind: "victorialogs".into(),
-        url: "http://localhost:1".into(),
-        ..Default::default()
-    };
-    let stale = crate::providers::compile(Some(&cfg2)).0.unwrap();
-    app2.bump_generation();
-    app2.handle_msg(Msg::LogProviderDiscovered {
-        generation: app2.generation - 1,
-        provider: Box::new(stale),
-    });
-    assert!(app2.log_provider.is_none());
-}
-
-#[tokio::test]
-async fn provider_logs_scopes_workload_namespace_and_rejects_others() {
-    let (mut app, _rx) = test_app();
-    install_provider(&mut app);
+    app.cluster.cluster_name = "gke_proj_us-central1_prod".into();
 
     app.switch_kind("deployments");
     apply(
         &mut app,
         json!({
             "apiVersion": "apps/v1", "kind": "Deployment",
-            "metadata": {"name": "web", "namespace": "prod"},
-            "spec": {"selector": {"matchLabels": {"app": "web"}}}
+            "metadata": {"name": "web", "namespace": "shop"},
+            "spec": {"selector": {
+                "matchLabels": {"app.kubernetes.io/name": "web"},
+                "matchExpressions": [{"key": "track", "operator": "NotIn", "values": ["canary"]}]
+            }}
         }),
     );
     app.table_state.select(Some(0));
     app.handle_key(press(KeyCode::Char('L'))).unwrap();
-    assert_eq!(app.mode, Mode::Logs);
-    match &app.logs.source {
-        Some(LogSource::Provider {
-            request: crate::providers::LogRequest::Selector { ns, labels },
-        }) => {
-            assert_eq!(ns, "prod");
-            assert_eq!(labels, "app=web");
-        }
-        other => panic!("unexpected source: {other:?}"),
-    }
-    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!(app.mode, Mode::Table);
+    assert_eq!(app.flash, "opened cloud logs");
+    let q = cloud_query(app.opened_urls.last().unwrap());
+    assert!(q.contains("resource.labels.cluster_name=\"prod\""), "{q}");
+    assert!(q.contains("resource.labels.namespace_name=\"shop\""), "{q}");
+    assert!(
+        q.contains(r#"labels."k8s-pod/app_kubernetes_io/name"="web""#),
+        "{q}"
+    );
+    assert!(
+        q.contains(r#"NOT (labels."k8s-pod/track"="canary")"#),
+        "{q}"
+    );
+
+    app.switch_kind("cronjobs");
+    apply(
+        &mut app,
+        json!({
+            "apiVersion": "batch/v1", "kind": "CronJob",
+            "metadata": {"name": "nightly", "namespace": "shop"}
+        }),
+    );
+    app.table_state.select(Some(0));
+    app.handle_key(press(KeyCode::Char('L'))).unwrap();
+    let q = cloud_query(app.opened_urls.last().unwrap());
+    assert!(
+        q.contains(r#"labels."logging.gke.io/top_level_controller_name"="nightly""#),
+        "{q}"
+    );
 
     app.switch_kind("namespaces");
     apply(
         &mut app,
+        json!({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "shop"}}),
+    );
+    app.table_state.select(Some(0));
+    app.handle_key(press(KeyCode::Char('L'))).unwrap();
+    let q = cloud_query(app.opened_urls.last().unwrap());
+    assert!(
+        q.ends_with("resource.labels.namespace_name=\"shop\""),
+        "{q}"
+    );
+
+    app.switch_kind("nodes");
+    apply(
+        &mut app,
+        json!({"apiVersion": "v1", "kind": "Node", "metadata": {"name": "gke-node-1"}}),
+    );
+    app.table_state.select(Some(0));
+    app.handle_key(press(KeyCode::Char('L'))).unwrap();
+    let q = cloud_query(app.opened_urls.last().unwrap());
+    assert!(q.starts_with("resource.type=\"k8s_node\""), "{q}");
+    assert!(
+        q.ends_with("resource.labels.node_name=\"gke-node-1\""),
+        "{q}"
+    );
+    assert_eq!(app.opened_urls.len(), 4);
+}
+
+#[tokio::test]
+async fn cloud_logs_warn_instead_of_opening() {
+    let (mut app, _rx) = test_app();
+
+    // A cluster that is not GKE has no log viewer to open.
+    app.switch_kind("namespaces");
+    apply(
+        &mut app,
+        json!({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "shop"}}),
+    );
+    app.table_state.select(Some(0));
+    app.handle_key(press(KeyCode::Char('L'))).unwrap();
+    assert!(app.flash.contains("supported: GKE"), "{}", app.flash);
+    assert!(app.flash_err);
+
+    app.cluster.cluster_name = "gke_proj_us-central1_prod".into();
+    app.switch_kind("deployments");
+    apply(
+        &mut app,
         json!({
-            "apiVersion": "v1", "kind": "Namespace",
-            "metadata": {"name": "prod"}
+            "apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"name": "web", "namespace": "shop"},
+            "spec": {}
         }),
     );
     app.table_state.select(Some(0));
     app.handle_key(press(KeyCode::Char('L'))).unwrap();
-    assert_eq!(app.mode, Mode::Logs);
-    match &app.logs.source {
-        Some(LogSource::Provider {
-            request: crate::providers::LogRequest::Namespace { ns },
-        }) => assert_eq!(ns, "prod"),
-        other => panic!("unexpected source: {other:?}"),
-    }
-    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!(app.flash, "deployment/web has no pod selector");
 
     app.switch_kind("secrets");
     apply(
         &mut app,
         json!({
             "apiVersion": "v1", "kind": "Secret",
-            "metadata": {"name": "creds", "namespace": "prod"}
+            "metadata": {"name": "creds", "namespace": "shop"}
         }),
     );
     app.table_state.select(Some(0));
     app.handle_key(press(KeyCode::Char('L'))).unwrap();
-    assert_eq!(app.mode, Mode::Table);
-    assert!(app.flash.contains("provider logs"), "{}", app.flash);
+    assert!(app.flash.starts_with("cloud logs cover"), "{}", app.flash);
+    assert!(app.opened_urls.is_empty());
 }
 
 #[tokio::test]
-async fn provider_logs_for_one_container_from_picker() {
+async fn cloud_logs_for_one_container_from_picker() {
     let (mut app, _rx) = test_app();
-    install_provider(&mut app);
+    app.cluster.cluster_name = "gke_proj_us-central1_prod".into();
     app.switch_kind("pods");
     apply(
         &mut app,
         json!({
             "apiVersion": "v1", "kind": "Pod",
-            "metadata": {"name": "api-1", "namespace": "prod"},
+            "metadata": {"name": "api-1", "namespace": "shop"},
             "spec": {"containers": [{"name": "app"}, {"name": "istio"}]}
         }),
     );
@@ -17974,90 +17932,10 @@ async fn provider_logs_for_one_container_from_picker() {
     assert_eq!(app.mode, Mode::Containers);
 
     app.handle_key(press(KeyCode::Char('L'))).unwrap();
-    assert_eq!(app.mode, Mode::Logs);
+    let q = cloud_query(app.opened_urls.last().expect("L opens cloud logs"));
     assert!(
-        app.logs.view.title.starts_with("api-1:app —"),
-        "{}",
-        app.logs.view.title
-    );
-    match &app.logs.source {
-        Some(LogSource::Provider {
-            request:
-                crate::providers::LogRequest::Pod {
-                    container: Some(c), ..
-                },
-        }) => assert_eq!(c, "app"),
-        other => panic!("unexpected source: {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn provider_lookback_prompt_changes_period_and_requeries() {
-    let (mut app, _rx) = test_app();
-    install_provider(&mut app);
-    app.switch_kind("pods");
-    apply(
-        &mut app,
-        json!({
-            "apiVersion": "v1", "kind": "Pod",
-            "metadata": {"name": "api-1", "namespace": "prod"},
-            "spec": {"containers": [{"name": "app"}]}
-        }),
-    );
-    app.table_state.select(Some(0));
-    app.handle_key(press(KeyCode::Char('L'))).unwrap();
-    assert!(app.logs.view.title.contains("victorialogs (1h)"));
-
-    // `T` prompts for a period, drawn over the logs view.
-    app.handle_key(press(KeyCode::Char('T'))).unwrap();
-    assert_eq!(app.mode, Mode::Prompt);
-    assert!(app.prompt_over_logs());
-    assert!(
-        app.prompt_label.contains("current: 1h"),
-        "{}",
-        app.prompt_label
-    );
-
-    // Esc returns to the logs view, keeping the period.
-    app.handle_key(press(KeyCode::Esc)).unwrap();
-    assert_eq!(app.mode, Mode::Logs);
-    assert!(app.logs.view.title.contains("(1h)"));
-
-    // A valid period retitles, updates the session provider, and re-queries
-    // (new log generation).
-    let gen_before = app.log_gen;
-    app.handle_key(press(KeyCode::Char('T'))).unwrap();
-    app.handle_key(press(KeyCode::Char('4'))).unwrap();
-    app.handle_key(press(KeyCode::Char('h'))).unwrap();
-    app.handle_key(press(KeyCode::Enter)).unwrap();
-    assert_eq!(app.mode, Mode::Logs);
-    assert!(
-        app.logs.view.title.contains("victorialogs (4h)"),
-        "{}",
-        app.logs.view.title
-    );
-    assert_eq!(app.log_provider.as_ref().unwrap().lookback_label, "4h");
-    assert!(app.log_gen > gen_before, "lookback change must re-stream");
-    assert_eq!(app.flash, "lookback: 4h");
-
-    // Garbage is rejected with a warning; nothing changes.
-    app.handle_key(press(KeyCode::Char('T'))).unwrap();
-    for c in "soon".chars() {
-        app.handle_key(press(KeyCode::Char(c))).unwrap();
-    }
-    app.handle_key(press(KeyCode::Enter)).unwrap();
-    assert_eq!(app.mode, Mode::Logs);
-    assert!(app.flash_err);
-    assert!(app.flash.contains("lookback"), "{}", app.flash);
-    assert!(app.logs.view.title.contains("(4h)"));
-
-    // Later provider launches inherit the changed period.
-    app.handle_key(press(KeyCode::Esc)).unwrap();
-    app.handle_key(press(KeyCode::Char('L'))).unwrap();
-    assert!(
-        app.logs.view.title.contains("victorialogs (4h)"),
-        "{}",
-        app.logs.view.title
+        q.ends_with("resource.labels.pod_name=\"api-1\"\nresource.labels.container_name=\"app\""),
+        "{q}"
     );
 }
 
@@ -18173,36 +18051,6 @@ async fn logs_time_anchors_restream_kubelet_logs() {
     // Without an anchor the configured `since` applies again.
     app.logs.since_anchor = None;
     assert_eq!(app.log_tail_and_since().1, Some(4 * 3600));
-}
-
-#[tokio::test]
-async fn logs_time_anchors_set_provider_lookback() {
-    let (mut app, _rx) = test_app();
-    app.mode = Mode::Logs;
-    app.return_mode = Mode::Table;
-    app.logs.source = Some(LogSource::Provider {
-        request: crate::providers::LogRequest::Namespace {
-            ns: "default".into(),
-        },
-    });
-    app.logs.view.title = "ns/default — victorialogs (1h)".into();
-
-    // `3` maps to the 15m window on the provider, not the kubelet anchor.
-    app.handle_key(press(KeyCode::Char('3'))).unwrap();
-    assert_eq!(app.provider_lookback_label(), "15m");
-    assert!(
-        app.logs.view.title.ends_with("victorialogs (15m)"),
-        "{}",
-        app.logs.view.title
-    );
-    assert_eq!(app.logs.since_anchor, None);
-
-    // `0` resets to the default lookback window.
-    app.handle_key(press(KeyCode::Char('0'))).unwrap();
-    assert_eq!(
-        app.provider_lookback_label(),
-        crate::providers::DEFAULT_LOOKBACK
-    );
 }
 
 // ----- view cache (instant redisplay on navigation) -------------------------
@@ -31219,7 +31067,7 @@ async fn startup_flashes_hidden_plugin_key_warning() {
     }];
     app.config_warnings = app.configure_keys(&Default::default());
     assert_eq!(app.config_warnings.len(), 1, "{:?}", app.config_warnings);
-    assert!(app.config_warnings[0].contains("keys.table.provider_logs"));
+    assert!(app.config_warnings[0].contains("keys.table.cloud_logs"));
 
     app.flash_config_warnings();
     assert!(app.flash_err);
@@ -31240,7 +31088,7 @@ async fn startup_flashes_hidden_plugin_key_warning() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("pretty-logs"), "{text}");
-    assert!(text.contains("keys.table.provider_logs"), "{text}");
+    assert!(text.contains("keys.table.cloud_logs"), "{text}");
 }
 
 #[tokio::test]
@@ -33250,7 +33098,7 @@ async fn log_marker_shortcut_renders_one_row_at_each_width() {
 }
 
 #[tokio::test]
-async fn log_marker_shortcut_handles_stopped_provider_and_replaced_buffers() {
+async fn log_marker_shortcut_handles_stopped_and_replaced_sources_and_buffers() {
     let (mut app, _rx) = test_app();
     palette(&mut app, "pods default");
     apply(
@@ -33269,13 +33117,9 @@ async fn log_marker_shortcut_handles_stopped_provider_and_replaced_buffers() {
     assert!(app.logs.stopped);
     app.handle_key(press(KeyCode::Char('m'))).unwrap();
     assert_eq!(app.logs.markers.len(), 2);
-    app.logs.source = Some(LogSource::Provider {
-        request: crate::providers::LogRequest::Pod {
-            ns: "default".into(),
-            pod: "web".into(),
-            container: None,
-            multi_container: false,
-        },
+    app.logs.source = Some(LogSource::Selector {
+        ns: "default".into(),
+        labels: "app=web".into(),
     });
     app.handle_key(press(KeyCode::Char('m'))).unwrap();
     assert_eq!(app.logs.markers.len(), 3);
@@ -33594,9 +33438,41 @@ async fn pod_header_keeps_action_columns_aligned() {
             })
             .unwrap()
     };
-    assert_eq!(position("l logs").0, position("t transfer").0);
-    assert_eq!(position("p prev logs").0, position("f port-fwd").0);
-    assert_eq!(position("p prev logs").0, position("ctrl-d delete").0);
+    assert_eq!(position("l logs").0, position("s shell").0);
+    assert_eq!(position("L cloud logs").0, position("f port-fwd").0);
+    assert_eq!(position("L cloud logs").0, position("t transfer").0);
+    assert_eq!(position("L cloud logs").0, position("ctrl-d delete").0);
+}
+
+#[tokio::test]
+async fn header_shows_cloud_logs_on_every_kind_that_supports_it() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let (mut app, _rx) = test_app();
+    for kind in [
+        "pods",
+        "deployments",
+        "statefulsets",
+        "daemonsets",
+        "replicasets",
+        "jobs",
+        "cronjobs",
+        "services",
+        "namespaces",
+        "nodes",
+    ] {
+        app.switch_kind(kind);
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let header: String = (0..8)
+            .map(|y| {
+                (0..160)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect();
+        assert!(header.contains("L cloud logs"), "{kind}: {header}");
+    }
 }
 
 #[tokio::test]

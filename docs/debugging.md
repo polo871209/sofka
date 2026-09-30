@@ -135,7 +135,7 @@ instead of hiding everything. `z` clears the on-screen buffer while the live
 stream keeps appending. A pod streams every container's logs at once. Full keymap:
 [Logs view](keys.md#logs-view).
 
-For history that outlives the pod, use [VictoriaLogs](providers.md#log-provider-victorialogs).
+On GKE, `L` opens the history that outlives the pod in the Logs Explorer. See [Cloud logs](providers.md#cloud-logs-gke).
 
 ## Debug containers and pods
 

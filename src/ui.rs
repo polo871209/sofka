@@ -809,14 +809,14 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
                 &[
                     (Action::Open, "containers"),
                     (Action::Logs, "logs"),
-                    (Action::PreviousLogs, "prev logs"),
+                    (Action::CloudLogs, "cloud logs"),
                 ],
             ),
             hint_line(
                 app,
                 &[
+                    (Action::PreviousLogs, "prev logs"),
                     (Action::ShellOrScale, "shell"),
-                    (Action::ActionMenu, "transfer"),
                     (Action::PortForward, "port-fwd"),
                 ],
             ),
@@ -833,7 +833,7 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
                 &[
                     (Action::Edit, "edit"),
                     (Action::Node, "node"),
-                    (Action::Owner, "owner"),
+                    (Action::ActionMenu, "transfer"),
                 ],
             ),
             hint_line(
@@ -851,7 +851,7 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
                 &[
                     (Action::Open, "pods"),
                     (Action::Logs, "logs"),
-                    (Action::Events, "events"),
+                    (Action::CloudLogs, "cloud logs"),
                 ],
             ),
             hint_line(
@@ -878,7 +878,10 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
                     (Action::PortForward, "port-fwd"),
                 ],
             ),
-            hint_line(app, &[(Action::Delete, "delete")]),
+            hint_line(
+                app,
+                &[(Action::Events, "events"), (Action::Delete, "delete")],
+            ),
         ],
         "daemonsets" => vec![
             hint_line(
@@ -886,7 +889,7 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
                 &[
                     (Action::Open, "pods"),
                     (Action::Logs, "logs"),
-                    (Action::Events, "events"),
+                    (Action::CloudLogs, "cloud logs"),
                 ],
             ),
             hint_line(
@@ -894,6 +897,7 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
                 &[
                     (Action::RestartOrRefresh, "restart"),
                     (Action::SetImage, "image"),
+                    (Action::Events, "events"),
                 ],
             ),
             hint_line(
@@ -915,7 +919,7 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
                 &[
                     (Action::Open, "pods"),
                     (Action::Logs, "logs"),
-                    (Action::Events, "events"),
+                    (Action::CloudLogs, "cloud logs"),
                 ],
             ),
             hint_line(
@@ -934,11 +938,16 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
                     (Action::Delete, "delete"),
                 ],
             ),
+            hint_line(app, &[(Action::Events, "events")]),
         ],
         "services" => vec![
             hint_line(
                 app,
-                &[(Action::Open, "pods"), (Action::PortForward, "port-fwd")],
+                &[
+                    (Action::Open, "pods"),
+                    (Action::PortForward, "port-fwd"),
+                    (Action::CloudLogs, "cloud logs"),
+                ],
             ),
             hint_line(
                 app,
@@ -970,7 +979,13 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
                     (Action::Drain, "drain"),
                 ],
             ),
-            hint_line(app, &[(Action::Delete, "delete")]),
+            hint_line(
+                app,
+                &[
+                    (Action::CloudLogs, "cloud logs"),
+                    (Action::Delete, "delete"),
+                ],
+            ),
         ],
         "namespaces" => vec![
             hint_line(
@@ -981,7 +996,14 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
                     (Action::Describe, "describe"),
                 ],
             ),
-            hint_line(app, &[(Action::Edit, "edit"), (Action::Delete, "delete")]),
+            hint_line(
+                app,
+                &[
+                    (Action::Edit, "edit"),
+                    (Action::CloudLogs, "cloud logs"),
+                    (Action::Delete, "delete"),
+                ],
+            ),
         ],
         "helm" => vec![
             hint_line(app, &[(Action::Open, "history")]),
@@ -1106,7 +1128,13 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
         lines.push(hint_line(app, &[(Action::Open, "helm history")]));
     }
     if app.cronjob_kind() {
-        lines.push(hint_line(app, &[(Action::ActionMenu, "trigger/suspend")]));
+        lines.push(hint_line(
+            app,
+            &[
+                (Action::ActionMenu, "trigger/suspend"),
+                (Action::CloudLogs, "cloud logs"),
+            ],
+        ));
     }
     if app.external_secret_kind() {
         lines.push(hint_line(app, &[(Action::RestartOrRefresh, "force-sync")]));
@@ -2013,10 +2041,9 @@ fn draw_logs(frame: &mut Frame, app: &mut App, area: Rect) {
         },
         if app.logs.wrap { " wrap" } else { "" },
         if app.logs.timestamps { " ts" } else { "" },
-        // Provider views manage the window in their own title suffix.
         match app.logs.anchor_label() {
-            Some(l) if !app.provider_logs_active() => format!(" ⏱{l}"),
-            _ => String::new(),
+            Some(l) => format!(" ⏱{l}"),
+            None => String::new(),
         },
     );
     let title = if bad_regex {
@@ -3849,7 +3876,7 @@ fn draw_containers(frame: &mut Frame, app: &mut App, area: Rect) {
             (Action::Shell, "shell"),
             (Action::Transfer, "transfer"),
             (Action::Debug, "debug"),
-            (Action::ProviderLogs, "provider"),
+            (Action::CloudLogs, "cloud logs"),
         ],
     );
     let desired_width = container_columns_width(&container_column_widths(app, usize::MAX)) + 4;

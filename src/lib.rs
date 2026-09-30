@@ -17,6 +17,7 @@ pub mod atomicfile;
 #[cfg(feature = "bench")]
 pub mod benchsupport;
 pub mod bundle;
+pub mod cloud_logs;
 pub mod columns;
 pub mod config;
 pub mod diagnostics;

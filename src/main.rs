@@ -485,11 +485,6 @@ async fn run_main(args: Args) -> Result<()> {
         eprintln!("warning: {warning}");
     }
     config_warnings.extend(role_warnings);
-    let (log_provider, provider_warnings) = providers::compile(cfg.providers.logs.as_ref());
-    for w in &provider_warnings {
-        eprintln!("warning: {w}");
-    }
-    app.log_provider = log_provider;
     let (metrics_provider, metrics_warnings) =
         providers::compile_metrics(cfg.providers.metrics.as_ref());
     for w in &metrics_warnings {

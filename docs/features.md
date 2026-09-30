@@ -256,7 +256,7 @@ include those conditions. Row filters can search the route paths.
   `pulse`, `xray`, `explain`, `timeline`, `gitops`, `argocd`, `adjacent`, `users`, `groups`, `policy`, `can-i`, `journal`,
   `debug`,
   `debug-clean`, `bundle`, `bundle-save`, `snapshot`, `snapshots`, `diff`,
-  `events`, `pf`, `notify`, `find`, `vlogs`, `rightsize`, `fleet`, `skin`,
+  `events`, `pf`, `notify`, `find`, `cloudlogs`, `rightsize`, `fleet`, `skin`,
   `reload`, `config`, `info`). `:` and `?` open the palette and help from every
   navigation screen, then close back to the screen where they were opened.
   `→` fills the highlighted suggestion into the command so you can keep typing
@@ -664,11 +664,10 @@ include those conditions. Row filters can search the route paths.
   Markers stay visible through filters, do not move a paused viewport, and are
   excluded from sofka copy/save. Clearing or replacing the buffer removes them.
   Their storage is bounded by the active log buffer cap.
-- **VictoriaLogs integration** (`L` / `:vlogs`) - log history from a
-  VictoriaLogs backend for a pod, container, workload, service, or whole
-  namespace, covering restarted and deleted pods. Zero config: sofka finds the
-  service in-cluster and reaches it through the API-server proxy. See
-  [Providers](providers.md#log-provider-victorialogs).
+- **Cloud logs** (`L` / `:cloudlogs`) - opens the GKE Logs Explorer in the
+  browser for a pod, container, workload, CronJob, service, namespace, or node.
+  The query matches pods by selector, so it covers restarted and deleted pods.
+  No configuration. See [Providers](providers.md#cloud-logs-gke).
 - **Right-sizing** (`:rightsize`) - estimate right-sized requests from past
   usage in a Prometheus or VictoriaMetrics backend, with a patch preview. Never
   mutates. See [Providers](providers.md#right-sizing-metrics-provider).

@@ -1,7 +1,7 @@
 # Providers and fleet
 
-Both providers autodiscover in-cluster by default. Configure them only to point
-at an external endpoint or to change the defaults.
+The metrics provider autodiscovers in-cluster by default. Configure it only to
+point at an external endpoint or to change the defaults.
 
 ## Right-sizing (metrics provider)
 
@@ -48,39 +48,15 @@ It uses the standard cAdvisor metric names
 VictoriaMetrics **cluster** mode (vmselect) needs a tenant path in the `url`.
 Single-node VM and Prometheus serve the API at the root and autodiscover fine.
 
-## Log provider (VictoriaLogs)
+## Cloud logs (GKE)
 
-`L` (or `:vlogs`) opens log history for the selection - pod, container, workload,
-service, or whole namespace - from a VictoriaLogs backend instead of the kubelet:
-a lookback query and a live tail, in the same logs view. It covers restarted and
-deleted pods, because the backend still has what the kubelet dropped.
+`L` (or `:cloudlogs`) opens the GKE Logs Explorer in the browser, with a query for the selection over the last hour. It works on pods, Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs, CronJobs, Services, namespaces, and nodes. In the container picker, `L` adds the container to the pod query.
 
-With no configuration, sofka finds the VictoriaLogs `Service` by its well-known
-labels (Helm charts and the VictoriaMetrics operator), queries it through the
-Kubernetes API-server service proxy, and reuses your kubeconfig credentials.
+sofka reads the project, location, and cluster from the kubeconfig cluster name, which GKE writes as `gke_<project>_<location>_<cluster>`. On any other cluster, `L` shows a warning and opens nothing. Cloud logs need no configuration.
 
-```toml
-[providers.logs]
-type = "victorialogs"
-url = "https://vlogs.example.com"  # omit to autodiscover in-cluster
-lookback = "1h"                    # initial query window (s/m/h/d)
-limit = 300                        # lines fetched by the initial query
+Workloads and Services match their pods by the pod selector (`matchLabels` and `matchExpressions`), so the query also finds restarted and deleted pods, and never pods of another workload. GKE writes the pod label `app.kubernetes.io/name` as the log label `k8s-pod/app_kubernetes_io/name`. A CronJob has no selector, so its query uses the `logging.gke.io/top_level_controller_name` label that GKE adds to the CronJob's pods.
 
-[providers.logs.headers]           # optional, sent with every request
-Authorization = "Bearer <token>"
-
-# Field names as ingested by your log shipper. Omit this section to let
-# sofka detect the convention from the backend's stream fields — vector,
-# fluentd, fluent-bit, OpenTelemetry, and bare namespace/pod/container
-# names are recognized. Configure only for exotic pipelines.
-[providers.logs.fields]
-namespace = "kubernetes.pod_namespace"
-pod = "kubernetes.pod_name"
-container = "kubernetes.container_name"
-```
-
-Like every section, `[providers.logs]` can live in a per-cluster or per-context
-override file, so each cluster can use its own backend.
+sofka opens the URL with `open` on macOS and `xdg-open` on Linux, and sends no credentials. The browser must be logged in to the Google Cloud console.
 
 ## Fleet dashboard
 

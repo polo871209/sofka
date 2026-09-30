@@ -403,11 +403,6 @@ pub fn services(n: usize) -> Vec<Service> {
         .collect()
 }
 
-/// Production one-pass VictoriaLogs candidate selection.
-pub fn pick_log_service(services: &[Service]) -> Option<(String, String, i32)> {
-    crate::providers::bench_pick_log_service(services)
-}
-
 /// Production one-pass Prometheus/VictoriaMetrics candidate selection.
 pub fn pick_metrics_service(services: &[Service]) -> Option<(String, String, i32)> {
     crate::providers::bench_pick_metrics_service(services)
@@ -415,23 +410,6 @@ pub fn pick_metrics_service(services: &[Service]) -> Option<(String, String, i32
 
 /// The allocation-heavy provider-selection implementation before this
 /// follow-up: materialize every usable candidate, then call `min_by_key`.
-pub fn pick_log_service_collected(services: &[Service]) -> Option<(String, String, i32)> {
-    let candidates: Vec<(&Service, i32)> = services
-        .iter()
-        .filter_map(|service| {
-            let ports = service.spec.as_ref()?.ports.as_ref()?;
-            let port = ports
-                .iter()
-                .find(|port| port.name.as_deref() == Some("http"))
-                .or_else(|| ports.iter().find(|port| port.port == 9428))
-                .or_else(|| ports.first())?;
-            Some((service, port.port))
-        })
-        .collect();
-    finish_collected(candidates)
-}
-
-/// Metrics-provider form of the former collected implementation.
 pub fn pick_metrics_service_collected(services: &[Service]) -> Option<(String, String, i32)> {
     let candidates: Vec<(&Service, i32)> = services
         .iter()

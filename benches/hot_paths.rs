@@ -420,12 +420,6 @@ fn provider_selection(c: &mut Criterion) {
     let mut g = c.benchmark_group("provider_selection");
     let services = bs::services(256);
 
-    g.bench_function("logs_streaming_256", |b| {
-        b.iter(|| black_box(bs::pick_log_service(black_box(&services))));
-    });
-    g.bench_function("logs_collected_baseline_256", |b| {
-        b.iter(|| black_box(bs::pick_log_service_collected(black_box(&services))));
-    });
     g.bench_function("metrics_streaming_256", |b| {
         b.iter(|| black_box(bs::pick_metrics_service(black_box(&services))));
     });
@@ -491,60 +485,6 @@ fn custom_columns(c: &mut Criterion) {
                 b.iter(|| {
                     for pod in &pods {
                         black_box(render_owned(pod, &col.pointer));
-                    }
-                });
-            },
-        );
-    }
-    g.finish();
-}
-
-/// Provider log records: the shipped selective visitor against the
-/// `serde_json::Value` DOM it replaced, over records carrying the extra fields
-/// an ingestion pipeline attaches.
-fn provider_records(c: &mut Criterion) {
-    let mut g = c.benchmark_group("provider_records");
-
-    for extra in [0usize, 12] {
-        let fields: String = (0..extra)
-            .map(|i| format!(r#","field_{i}":"value {i}""#))
-            .collect();
-        let lines: Vec<String> = (0..10_000)
-            .map(|i| {
-                format!(
-                    r#"{{"_time":"2026-09-05T12:00:00Z","_msg":"request {i} served","kubernetes.pod_name":"api-{i}","kubernetes.container_name":"app"{fields}}}"#
-                )
-            })
-            .collect();
-
-        g.bench_with_input(
-            BenchmarkId::new("visitor_10000", extra),
-            &lines,
-            |b, lines| {
-                b.iter(|| {
-                    for l in lines {
-                        black_box(sofka::providers::bench_parse_entry(l));
-                    }
-                });
-            },
-        );
-        g.bench_with_input(
-            BenchmarkId::new("dom_baseline_10000", extra),
-            &lines,
-            |b, lines| {
-                b.iter(|| {
-                    for l in lines {
-                        let v: serde_json::Value = serde_json::from_str(l).unwrap();
-                        black_box((
-                            v.get("_msg").and_then(|v| v.as_str()).map(str::to_string),
-                            v.get("_time").and_then(|v| v.as_str()).map(str::to_string),
-                            v.get("kubernetes.pod_name")
-                                .and_then(|v| v.as_str())
-                                .map(str::to_string),
-                            v.get("kubernetes.container_name")
-                                .and_then(|v| v.as_str())
-                                .map(str::to_string),
-                        ));
                     }
                 });
             },
@@ -706,7 +646,6 @@ criterion_group!(
     provider_selection,
     frame_clock,
     custom_columns,
-    provider_records,
     fuzzy,
     frame_models,
     dependencies

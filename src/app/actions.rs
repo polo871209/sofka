@@ -1454,10 +1454,6 @@ impl App {
         self.node_roles = Arc::new(node_roles);
         warnings.extend(role_warnings);
         warnings.extend(threshold_warnings);
-        let (log_provider, provider_warnings) =
-            crate::providers::compile(resolved.config.providers.logs.as_ref());
-        self.log_provider = log_provider;
-        warnings.extend(provider_warnings);
         let (metrics_provider, metrics_warnings) =
             crate::providers::compile_metrics(resolved.config.providers.metrics.as_ref());
         self.metrics_provider = metrics_provider;

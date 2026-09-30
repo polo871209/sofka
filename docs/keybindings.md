@@ -237,11 +237,11 @@ for those operations.
 | --------------- | ---------------- |
 | `back`          | `esc`            |
 | `close`         | `q`              |
+| `cloud_logs`    | `L`              |
 | `debug`         | `d`              |
 | `down`          | `j`, `down`      |
 | `logs`          | `enter`, `l`     |
 | `previous_logs` | `p`              |
-| `provider_logs` | `L`              |
 | `shell`         | `s`              |
 | `transfer`      | `t`              |
 | `up`            | `k`, `up`        |
@@ -611,6 +611,7 @@ for those operations.
 | `all_namespaces`     | `0`                  |
 | `attach`             | `a`                  |
 | `back`               | `esc`                |
+| `cloud_logs`         | `L`                  |
 | `copy_cell`          | `Y`                  |
 | `copy_name`          | `c`                  |
 | `cordon`             | `C`                  |
@@ -644,7 +645,6 @@ for those operations.
 | `port_forward`       | `f`, `F`             |
 | `previous_logs`      | `p`                  |
 | `previous_view`      | `backtab`            |
-| `provider_logs`      | `L`                  |
 | `refresh`            | `ctrl-r`             |
 | `restart_or_refresh` | `r`                  |
 | `right`              | `right`              |

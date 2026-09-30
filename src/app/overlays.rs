@@ -57,12 +57,16 @@ impl App {
                     self.exec_into(ns, name, Some(c));
                 }
             }
-            (Some(Action::ProviderLogs), _) => {
+            (Some(Action::CloudLogs), _) => {
                 if let Some(i) = self.container_state.selected()
                     && let Some(c) = self.container_list.get(i).cloned()
-                    && let Some((ns, name)) = self.container_pod.clone()
+                    && let Some((ns, pod)) = self.container_pod.clone()
                 {
-                    self.launch_provider_container_logs(ns, name, c);
+                    self.launch_cloud_logs(crate::cloud_logs::Target::Pod {
+                        ns,
+                        pod,
+                        container: Some(c),
+                    });
                 }
             }
             // Transfer files to/from this container (`kubectl cp -c`).

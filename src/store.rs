@@ -321,13 +321,6 @@ pub enum Msg {
         ns: String,
         allowed: std::collections::HashSet<String>,
     },
-    /// A log provider autodiscovered in the cluster (no `[providers.logs]`
-    /// url configured), cached so later `L` presses skip the service lookup.
-    /// Tagged with the view generation: a context switch invalidates it.
-    LogProviderDiscovered {
-        generation: u64,
-        provider: Box<crate::providers::LogProvider>,
-    },
     /// Result of a `:debug-clean` node-debugger cleanup: how many pods were
     /// deleted and any per-pod failures (`ns/name: reason`).
     DebuggersCleaned {

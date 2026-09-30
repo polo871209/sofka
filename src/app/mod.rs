@@ -443,12 +443,6 @@ enum LogSource {
         container: Option<String>,
         previous: bool,
     },
-    /// The configured external log provider (`[providers.logs]`), queried for
-    /// the selection instead of the kubelet — survives pod restarts and covers
-    /// deleted pods and whole namespaces.
-    Provider {
-        request: crate::providers::LogRequest,
-    },
 }
 
 enum PromptKind {
@@ -644,7 +638,7 @@ enum PaletteAction {
     Diff,
     Events,
     PortForwards,
-    ProviderLogs,
+    CloudLogs,
     Skin,
     Helm,
     Notify,
@@ -763,8 +757,8 @@ const PALETTE_COMMANDS: &[PaletteCommand] = &[
         names: &["pf", "portforwards", "forwards"],
     },
     PaletteCommand {
-        action: PaletteAction::ProviderLogs,
-        names: &["vlogs", "plogs", "providerlogs"],
+        action: PaletteAction::CloudLogs,
+        names: &["cloudlogs", "clogs"],
     },
     PaletteCommand {
         action: PaletteAction::Skin,
@@ -1888,6 +1882,9 @@ pub struct App {
     /// developer's kubeconfig.
     #[cfg(test)]
     pub(super) context_index_override: Option<crate::k8s::ContextIndex>,
+    /// URLs `L` would open in the browser. Tests read this instead of launching one.
+    #[cfg(test)]
+    pub(super) opened_urls: Vec<String>,
     pending_argocd_target: Option<argocd::RemoteJump>,
     /// Where `esc` goes back to while a view a jump opened is on screen.
     argocd_return: Option<argocd::ArgocdReturn>,
@@ -2307,9 +2304,6 @@ pub struct App {
     /// across rows so the filter pass doesn't allocate a `String` per object.
     hay_buf: RefCell<String>,
 
-    /// Compiled log provider from `[providers.logs]`, re-resolved on context
-    /// switch and `:reload` so each cluster can point at its own backend.
-    pub log_provider: Option<crate::providers::LogProvider>,
     /// Prometheus/VictoriaMetrics backend for right-sizing (`:rightsize`),
     /// resolved to the API-server proxy on first use when autodiscovered.
     pub metrics_provider: Option<crate::providers::MetricsProvider>,
@@ -2392,6 +2386,8 @@ impl App {
             pending_resource_query: None,
             #[cfg(test)]
             context_index_override: None,
+            #[cfg(test)]
+            opened_urls: Vec::new(),
             pending_argocd_target: None,
             argocd_return: None,
             pending_argocd_return: None,
@@ -2613,7 +2609,6 @@ impl App {
                 sort_keys: crate::store::FastMap::default(),
                 helm_latest: None,
             }),
-            log_provider: None,
             metrics_provider: None,
             user_views: HashMap::new(),
             thresholds: crate::thresholds::Compiled::default(),
@@ -2668,12 +2663,6 @@ impl App {
         self.pvc.active
             && self.confirm_return == Mode::PvcExplore
             && matches!(self.prompt_kind, Some(PromptKind::GuardConfirm { .. }))
-    }
-
-    /// Whether the logs view is showing the external log provider (enables
-    /// provider-only keys like `T`).
-    pub fn provider_logs_active(&self) -> bool {
-        matches!(self.logs.source, Some(LogSource::Provider { .. }))
     }
 }
 
