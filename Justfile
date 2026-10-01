@@ -1,8 +1,6 @@
 set unstable
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
-mod nix '.just/nix.just'
-mod release '.just/release.just'
 mod rust '.just/rust.just'
 
 default:
@@ -46,21 +44,3 @@ smoke: rust::smoke
 # Render one headless UI snapshot.
 snapshot resource="pods":
     just rust snapshot {{ resource }}
-
-# Run Nix's flake checks.
-nix-check: nix::check
-
-# Build the Nix package.
-nix-build: nix::build
-
-# Build and smoke-test the Nix package.
-nix-smoke: nix::smoke
-
-# Release a patch version.
-release-patch: release::patch
-
-# Release a minor version.
-release-minor: release::minor
-
-# Release a major version.
-release-major: release::major

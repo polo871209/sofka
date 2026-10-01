@@ -1,0 +1,46 @@
+name: Sync upstream
+
+# Moves `main` to the commit of the newest upstream release tag, so `polo` rebases onto released code only.
+# GitHub cannot trigger on another repository's tags, so this polls. Scheduled runs only fire from the default branch, `polo`.
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM: https://github.com/nklmilojevic/sofka
+      # GITHUB_TOKEN cannot push commits that touch .github/workflows, so this is a PAT with workflow write access.
+      TOKEN: ${{ secrets.SYNC_TOKEN }}
+    steps:
+      - name: Sync main to the newest upstream tag
+        run: |
+          tag="$(git ls-remote --tags --refs "$UPSTREAM" 'v*' \
+            | awk '{ sub("refs/tags/", "", $2); print $2 }' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V | tail -n 1)"
+          test -n "$tag" || { echo "::error::no release tag found in $UPSTREAM"; exit 1; }
+
+          origin="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # The last line is the peeled commit for an annotated tag.
+          want="$(git ls-remote "$UPSTREAM" "refs/tags/$tag" | tail -n 1 | cut -f 1)"
+          have="$(git ls-remote "$origin" refs/heads/main | cut -f 1)"
+          if test "$want" = "$have"; then
+            echo "main is already at $tag"
+            exit 0
+          fi
+
+          git init -q sync && cd sync
+          git fetch -q --no-tags "$UPSTREAM" "refs/tags/$tag"
+          # Only the branch moves: the fork keeps no upstream tags, so the rolling release tag is its only tag.
+          # No --force: if main has its own commits, the push fails instead of dropping them.
+          git push "$origin" "FETCH_HEAD^{commit}:refs/heads/main"
+          echo "main is now at $tag"
