@@ -79,9 +79,6 @@ Use [inline plugin merging](#inline-plugin-merging) to combine plugins by name. 
 invalid drop-in file is skipped with a warning. `:config` lists the drop-in
 files and `:reload` reads them again.
 
-The [Home Manager module](home-manager.md) can manage generated TOML settings
-or existing TOML and YAML files, including cluster and context overrides.
-
 ## Inline plugin merging
 
 By default, each file that contains `plugins` replaces the complete inherited

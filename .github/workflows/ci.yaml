@@ -1,8 +1,6 @@
 name: CI
 
-# PRs only. Pushes to main run no CI. Home Manager tests run here.
-# The release workflow builds Nix packages for all four platforms and updates
-# the Cachix cache. Package build failures can still first appear at release.
+# PRs only. Pushes to main run no CI.
 on:
   pull_request:
 
@@ -10,23 +8,6 @@ permissions:
   contents: read
 
 jobs:
-  home-manager:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Setup Nix
-        uses: $/.github/actions/setup-nix
-
-      - name: Check flake outputs on all supported systems
-        run: nix flake check --no-build --all-systems
-
-      - name: Test Home Manager module
-        run: nix build .#checks.x86_64-linux.home-manager --no-link --print-build-logs
-
   rust:
     runs-on: ubuntu-latest
     steps:

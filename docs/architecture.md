@@ -98,18 +98,3 @@ Pull requests run a separate coverage job. Download the `coverage-html` artifact
 from the CI run, extract it, and open `index.html`. Reports are kept for 14 days.
 There is no minimum coverage percentage. Use the report to find missing tests;
 coverage alone does not show whether a test checks the correct behavior.
-
-## Release
-
-After merging the release-ready changes to `main`, run one of:
-
-```sh
-just release-patch
-just release-minor
-just release-major
-```
-
-The recipe switches to a clean, up-to-date `main`, bumps `Cargo.toml` and
-`Cargo.lock`, commits and pushes the version bump, then creates the GitHub
-Release. The release workflow runs off that published release: it uploads the
-platform binaries, publishes to crates.io, and warms the Nix cache.

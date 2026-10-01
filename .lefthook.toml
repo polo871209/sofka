@@ -17,16 +17,6 @@ glob = ["*.rs", "Cargo.toml", "Cargo.lock"]
 run = "cargo clippy --locked --all-targets -- -D warnings"
 priority = 2
 
-[pre-commit.commands.test]
-glob = ["*.rs", "Cargo.toml", "Cargo.lock"]
-run = "cargo test --locked --quiet"
-priority = 3
-
-[pre-commit.commands.format-nix]
-glob = ["*.nix"]
-run = "nixpkgs-fmt {staged_files}"
-stage_fixed = true
-
 [pre-commit.commands.format-markdown]
 glob = ["*.md", "*.markdown", "*.mdx"]
 run = "oxfmt {staged_files}"
@@ -38,5 +28,5 @@ run = "oxfmt {staged_files}"
 stage_fixed = true
 
 [pre-commit.commands.zizmor]
-glob = [".github/workflows/*.yaml", ".github/actions/**/action.yaml"]
+glob = [".github/workflows/*.yaml"]
 run = "zizmor --offline --min-confidence medium --min-severity low {staged_files}"
