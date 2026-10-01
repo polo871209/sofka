@@ -1,0 +1,6 @@
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Personal fork: major tags track the latest release, so no hash pins.
+        "*": ref-pin
