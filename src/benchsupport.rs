@@ -11,6 +11,7 @@
 //! `pod_summary` walks that array and a fixture without it would measure an
 //! empty loop.
 
+use crate::json::Pointer as _;
 use k8s_openapi::api::core::v1::Service;
 use kube::core::DynamicObject;
 use serde_json::json;
@@ -215,7 +216,7 @@ pub fn helm_release_json(i: usize) -> Vec<u8> {
     let secret = helm_secret(i);
     let wire = secret
         .data
-        .pointer("/data/release")
+        .at("/data/release")
         .and_then(serde_json::Value::as_str)
         .expect("fixture carries a release payload");
     let helm_encoded = BASE64.decode(wire).expect("outer base64");
@@ -269,6 +270,24 @@ pub fn pods_app(n: usize) -> (App, Receiver<Msg>) {
     a.bench_refresh_view_spec();
     seed(&mut a, (0..n).map(pod));
     (a, rx)
+}
+
+/// A following logs view whose buffer already holds `cap` lines, so each new
+/// batch trims the front: the steady state of a busy pod after a few seconds.
+pub fn full_logs_app(cap: usize) -> (App, Receiver<Msg>) {
+    let (mut a, rx) = app();
+    a.logs_cfg.buffer = cap;
+    feed_logs(&mut a, log_lines(cap));
+    (a, rx)
+}
+
+/// One log batch through the real message path.
+pub fn feed_logs(app: &mut App, lines: Vec<String>) {
+    // A fresh App streams under log generation 0.
+    app.handle_msg(Msg::LogLines {
+        generation: 0,
+        lines,
+    });
 }
 
 /// A store-shaped object map of `n` pods — what one entry of the view cache
@@ -339,6 +358,22 @@ pub fn touch_one(app: &mut App, i: usize) {
         key,
         obj: Box::new(o),
     });
+}
+
+/// `count` watch updates delivered as one queued batch, the way the event
+/// loop drains the channel.
+pub fn touch_batch(app: &mut App, start: usize, count: usize, n: usize) {
+    let msgs: Vec<Msg> = (start..start + count)
+        .map(|i| {
+            let o = pod(i % n);
+            Msg::Applied {
+                generation: app.generation,
+                key: row_key(&o),
+                obj: Box::new(o),
+            }
+        })
+        .collect();
+    app.handle_msgs(msgs);
 }
 
 /// A synthetic log buffer: mostly plain ASCII, with the JSON, klog and

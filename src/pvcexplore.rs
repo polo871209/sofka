@@ -8,6 +8,7 @@
 //! local side of the split view. Everything that talks to a cluster or the UI
 //! lives in `app/pvcexplore.rs`.
 
+use crate::json::Pointer as _;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -430,7 +431,7 @@ fn mounts_in(pod: &DynamicObject, claim: &str) -> Vec<Mount> {
         .into_iter()
         .flatten()
         .filter(|v| {
-            v.pointer("/persistentVolumeClaim/claimName")
+            v.at("/persistentVolumeClaim/claimName")
                 .and_then(Value::as_str)
                 == Some(claim)
         })
@@ -485,7 +486,7 @@ fn mounts_in(pod: &DynamicObject, claim: &str) -> Vec<Mount> {
                     },
                     read_only: m.get("readOnly").and_then(Value::as_bool).unwrap_or(false)
                         || volume
-                            .pointer("/persistentVolumeClaim/readOnly")
+                            .at("/persistentVolumeClaim/readOnly")
                             .and_then(Value::as_bool)
                             .unwrap_or(false),
                     helper: false,
@@ -548,12 +549,12 @@ pub fn helper_options(
         .filter(|p| !matches!(phase(p), "Succeeded" | "Failed"))
         .filter(|p| {
             p.data
-                .pointer("/spec/volumes")
+                .at("/spec/volumes")
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
                 .any(|v| {
-                    v.pointer("/persistentVolumeClaim/claimName")
+                    v.at("/persistentVolumeClaim/claimName")
                         .and_then(Value::as_str)
                         == Some(name)
                 })
@@ -561,7 +562,7 @@ pub fn helper_options(
         .collect();
     let modes: Vec<_> = claim
         .data
-        .pointer("/spec/accessModes")
+        .at("/spec/accessModes")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -579,7 +580,7 @@ pub fn helper_options(
     if modes.contains(&"ReadWriteOnce") && !consumers.is_empty() {
         let nodes: std::collections::BTreeSet<_> = consumers
             .iter()
-            .filter_map(|p| p.data.pointer("/spec/nodeName").and_then(Value::as_str))
+            .filter_map(|p| p.data.at("/spec/nodeName").and_then(Value::as_str))
             .filter(|n| !n.is_empty())
             .collect();
         if nodes.len() != 1 {
@@ -2473,17 +2474,17 @@ mod recovery_tests {
         assert!(options.read_only);
         let mut manifest = helper_pod("data", "busybox:1.37", 900, json!({}));
         apply_helper_options(&mut manifest, &options);
-        assert_eq!(manifest.pointer("/spec/affinity/nodeAffinity/requiredDuringSchedulingIgnoredDuringExecution/nodeSelectorTerms/0/matchFields/0/values/0"), Some(&json!("worker-a")));
+        assert_eq!(manifest.at("/spec/affinity/nodeAffinity/requiredDuringSchedulingIgnoredDuringExecution/nodeSelectorTerms/0/matchFields/0/values/0"), Some(&json!("worker-a")));
         assert_eq!(
-            manifest.pointer("/spec/containers/0/volumeMounts/0/subPath"),
+            manifest.at("/spec/containers/0/volumeMounts/0/subPath"),
             Some(&json!("tenant"))
         );
         assert_eq!(
-            manifest.pointer("/spec/containers/0/volumeMounts/0/readOnly"),
+            manifest.at("/spec/containers/0/volumeMounts/0/readOnly"),
             Some(&json!(true))
         );
         assert_eq!(
-            manifest.pointer("/spec/volumes/0/persistentVolumeClaim/readOnly"),
+            manifest.at("/spec/volumes/0/persistentVolumeClaim/readOnly"),
             Some(&json!(true))
         );
     }
