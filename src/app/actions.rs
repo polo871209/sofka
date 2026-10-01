@@ -1,4 +1,5 @@
 use super::*;
+use crate::json::Pointer as _;
 
 /// Interactive-shell entrypoint for `exec`/`debug`: prefer bash when the image
 /// ships it, otherwise fall back to sh, in a single `sh -c` invocation.
@@ -730,7 +731,7 @@ impl App {
         } else {
             "/spec/template/spec/containers"
         };
-        let Some(cs) = obj.data.pointer(ptr).and_then(Value::as_array) else {
+        let Some(cs) = obj.data.at(ptr).and_then(Value::as_array) else {
             self.flash_warn("no containers found");
             return;
         };
@@ -773,8 +774,8 @@ impl App {
         let Some(obj) = self.selected_ref() else {
             return;
         };
-        if obj.data.pointer("/spec/chart").is_none() {
-            let message = if obj.data.pointer("/spec/chartRef").is_some() {
+        if obj.data.at("/spec/chart").is_none() {
+            let message = if obj.data.at("/spec/chartRef").is_some() {
                 "chart version comes from the source in spec.chartRef - set it there"
             } else {
                 "no spec.chart found"
@@ -786,7 +787,7 @@ impl App {
         let name = obj.metadata.name.clone().unwrap_or_default();
         self.prompt_input = obj
             .data
-            .pointer("/spec/chart/spec/version")
+            .at("/spec/chart/spec/version")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
@@ -1347,7 +1348,7 @@ impl App {
                                 | "replicationcontrollers"
                         )
                 })
-                .and_then(|_| obj.data.pointer("/spec/replicas").and_then(Value::as_i64));
+                .and_then(|_| obj.data.at("/spec/replicas").and_then(Value::as_i64));
             if let Some(cur) = cur {
                 format!("Scale {name} to replicas (current {cur}):")
             } else {
@@ -3204,7 +3205,7 @@ fn probe_local_port(port: u16) -> LocalPort {
 /// Collect declared ports from a Service manifest as `"port:port  (name)"` labels.
 /// Only TCP ports are included — `kubectl port-forward` doesn't support UDP/SCTP.
 fn service_port_labels(data: &Value) -> Vec<String> {
-    let Some(ports) = data.pointer("/spec/ports").and_then(Value::as_array) else {
+    let Some(ports) = data.at("/spec/ports").and_then(Value::as_array) else {
         return Vec::new();
     };
     ports
@@ -3236,7 +3237,7 @@ fn pod_port_labels(data: &Value) -> Vec<String> {
             Some("/status/ephemeralContainerStatuses"),
         ),
     ] {
-        let Some(containers) = data.pointer(path).and_then(Value::as_array) else {
+        let Some(containers) = data.at(path).and_then(Value::as_array) else {
             continue;
         };
         for c in containers {
@@ -3246,7 +3247,7 @@ fn pod_port_labels(data: &Value) -> Vec<String> {
             {
                 continue;
             }
-            let Some(ports) = c.pointer("/ports").and_then(Value::as_array) else {
+            let Some(ports) = c.at("/ports").and_then(Value::as_array) else {
                 continue;
             };
             for p in ports {
@@ -3275,12 +3276,11 @@ fn is_tcp(port: &Value, key: &str) -> bool {
 
 /// Whether the named container in `status_path` has a `terminated` state.
 fn container_terminated(data: &Value, status_path: &str, name: &str) -> bool {
-    let Some(statuses) = data.pointer(status_path).and_then(Value::as_array) else {
+    let Some(statuses) = data.at(status_path).and_then(Value::as_array) else {
         return false;
     };
     statuses.iter().any(|s| {
-        s.get("name").and_then(Value::as_str) == Some(name)
-            && s.pointer("/state/terminated").is_some()
+        s.get("name").and_then(Value::as_str) == Some(name) && s.at("/state/terminated").is_some()
     })
 }
 

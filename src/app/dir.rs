@@ -7,6 +7,7 @@
 //! preview is never applied unseen and rendered Secrets never touch the disk.
 
 use super::*;
+use crate::json::Pointer as _;
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -257,7 +258,7 @@ pub(super) fn rendered_objects(
             }
         }
         let field = |p: &str| {
-            item.pointer(p)
+            item.at(p)
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string()

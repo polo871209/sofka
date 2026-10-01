@@ -1,4 +1,5 @@
 use super::*;
+use crate::json::Pointer as _;
 
 use crate::rollout::{self, Workload};
 
@@ -128,11 +129,7 @@ impl App {
             let title = format!("{name} — rollback preview (live → revision {revision})");
             let msg = match api.get(&name).await {
                 Ok(live) => {
-                    let live = live
-                        .data
-                        .pointer("/spec/template")
-                        .map(yaml)
-                        .unwrap_or_default();
+                    let live = live.data.at("/spec/template").map(yaml).unwrap_or_default();
                     let lines = details::diff_lines(&live, &yaml(&target));
                     let warn = lines
                         .iter()
