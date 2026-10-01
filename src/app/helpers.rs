@@ -594,7 +594,7 @@ pub(super) fn osc52_sequence(text: &str) -> String {
 pub(super) async fn forward_log_stream(
     api: Api<Pod>,
     pod: String,
-    lp: LogParams,
+    mut lp: LogParams,
     prefix: String,
     tx: Sender<Msg>,
     generation: u64,
@@ -603,74 +603,245 @@ pub(super) async fn forward_log_stream(
     use futures_util::{AsyncBufReadExt, TryStreamExt};
     use tokio::time::MissedTickBehavior;
 
-    let stream = loop {
-        if flag.load(Ordering::SeqCst) != generation || tx.is_closed() {
-            return;
-        }
-        match api.log_stream(&pod, &lp).await {
-            Ok(stream) => break stream,
-            Err(kube::Error::Api(e))
-                if lp.follow
-                    && !lp.previous
-                    && e.code == 400
-                    && e.message.contains("is waiting to start") =>
-            {
-                tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
-                    _ = tx.closed() => return,
-                }
-            }
-            Err(e) => {
-                let _ = tx
-                    .send(Msg::LogLines {
-                        generation,
-                        lines: vec![format!("{prefix}[error] {e}")],
-                    })
-                    .await;
+    let mut resume = LogResume::default();
+    let mut pause = LOG_RECONNECT_MIN;
+    loop {
+        let stream = loop {
+            if flag.load(Ordering::SeqCst) != generation || tx.is_closed() {
                 return;
             }
-        }
-    };
+            match api.log_stream(&pod, &lp).await {
+                Ok(stream) => break stream,
+                Err(kube::Error::Api(e))
+                    if lp.follow
+                        && !lp.previous
+                        && e.code == 400
+                        && e.message.contains("is waiting to start") =>
+                {
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                        _ = tx.closed() => return,
+                    }
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(Msg::LogLines {
+                            generation,
+                            lines: vec![format!("{prefix}[error] {e}")],
+                        })
+                        .await;
+                    return;
+                }
+            }
+        };
 
-    let mut lines = stream.lines();
-    let mut batch = Vec::with_capacity(LOG_BATCH_LINES);
-    let mut flush = tokio::time::interval(Duration::from_millis(LOG_BATCH_MS));
-    flush.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut lines = stream.lines();
+        let mut batch = Vec::with_capacity(LOG_BATCH_LINES);
+        let mut flush = tokio::time::interval(Duration::from_millis(LOG_BATCH_MS));
+        flush.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut fresh = false;
 
-    loop {
-        if flag.load(Ordering::SeqCst) != generation {
-            break;
-        }
+        loop {
+            if flag.load(Ordering::SeqCst) != generation {
+                break;
+            }
 
-        tokio::select! {
-            next = lines.try_next() => {
-                match next {
-                    Ok(Some(line)) => {
-                        batch.push(format!("{prefix}{line}"));
-                        if batch.len() >= LOG_BATCH_LINES
-                            && !send_log_batch(&tx, generation, &mut batch).await
-                        {
+            tokio::select! {
+                next = lines.try_next() => {
+                    match next {
+                        Ok(Some(line)) => {
+                            if !resume.admit(&line) {
+                                continue;
+                            }
+                            fresh = true;
+                            batch.push(format!("{prefix}{line}"));
+                            if batch.len() >= LOG_BATCH_LINES
+                                && !send_log_batch(&tx, generation, &mut batch).await
+                            {
+                                break;
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            batch.push(format!("{prefix}[error] {e}"));
                             break;
                         }
                     }
-                    Ok(None) => break,
-                    Err(e) => {
-                        batch.push(format!("{prefix}[error] {e}"));
+                }
+                _ = flush.tick(), if !batch.is_empty() => {
+                    if !send_log_batch(&tx, generation, &mut batch).await {
                         break;
                     }
                 }
             }
-            _ = flush.tick(), if !batch.is_empty() => {
-                if !send_log_batch(&tx, generation, &mut batch).await {
-                    break;
-                }
-            }
+        }
+
+        if flag.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        if !send_log_batch(&tx, generation, &mut batch).await {
+            return;
+        }
+        // A followed stream ends when its container exits or the connection
+        // drops. Resume from the newest line unless the pod cannot log again.
+        if !lp.follow || lp.previous || resume.untimed {
+            return;
+        }
+        pause = if fresh {
+            LOG_RECONNECT_MIN
+        } else {
+            (pause * 2).min(LOG_RECONNECT_MAX)
+        };
+        tokio::select! {
+            _ = tokio::time::sleep(pause) => {}
+            _ = tx.closed() => return,
+        }
+        if !wait_for_log_source(&api, &pod, lp.container.as_deref()).await {
+            return;
+        }
+        if let Some(since) = resume.since() {
+            lp.since_time = Some(since);
+            lp.since_seconds = None;
+            lp.tail_lines = None;
         }
     }
+}
 
-    if flag.load(Ordering::SeqCst) == generation {
-        let _ = send_log_batch(&tx, generation, &mut batch).await;
+const LOG_RECONNECT_MIN: Duration = Duration::from_secs(1);
+const LOG_RECONNECT_MAX: Duration = Duration::from_secs(10);
+
+/// Where a reconnected log stream continues. `sinceTime` has one-second
+/// precision, so the server repeats lines from the last second. Those lines
+/// are dropped by timestamp, and lines at the newest timestamp by content.
+#[derive(Default)]
+pub(super) struct LogResume {
+    newest: Option<i128>,
+    /// Every line shown with the `newest` timestamp.
+    at_newest: Vec<String>,
+    /// Lines of `at_newest` the current replay has not repeated yet.
+    pending: Vec<String>,
+    replaying: bool,
+    /// A line arrived without a timestamp, so a replay cannot be deduplicated.
+    pub(super) untimed: bool,
+}
+
+impl LogResume {
+    /// Whether to show `line`. Records it as the resume point.
+    pub(super) fn admit(&mut self, line: &str) -> bool {
+        let Some(ts) = line
+            .split(' ')
+            .next()
+            .and_then(|t| t.parse::<k8s_openapi::jiff::Timestamp>().ok())
+            .map(|t| t.as_nanosecond())
+        else {
+            self.untimed = true;
+            return true;
+        };
+        let newest = self.newest.unwrap_or(i128::MIN);
+        if self.replaying {
+            if ts < newest {
+                return false;
+            }
+            if ts == newest {
+                if let Some(i) = self.pending.iter().position(|l| l == line) {
+                    self.pending.swap_remove(i);
+                    return false;
+                }
+            } else {
+                self.replaying = false;
+                self.pending.clear();
+            }
+        }
+        if ts > newest {
+            self.newest = Some(ts);
+            self.at_newest.clear();
+        }
+        if ts >= newest {
+            self.at_newest.push(line.to_owned());
+        }
+        true
     }
+
+    /// The `sinceTime` for the next stream. Starts dropping its replay.
+    pub(super) fn since(&mut self) -> Option<k8s_openapi::jiff::Timestamp> {
+        let newest = self.newest?;
+        self.replaying = true;
+        self.pending = self.at_newest.clone();
+        k8s_openapi::jiff::Timestamp::from_nanosecond(newest).ok()
+    }
+}
+
+/// Wait until `container` in `pod` runs again. `false` means it never will:
+/// the pod is gone, finished, or does not restart this container.
+async fn wait_for_log_source(api: &Api<Pod>, pod: &str, container: Option<&str>) -> bool {
+    use futures_util::StreamExt;
+    let events = kube::runtime::watcher::watch_object(api.clone(), pod);
+    let mut events = std::pin::pin!(events);
+    loop {
+        match events.next().await {
+            Some(Ok(Some(p))) => match log_source_state(&p, container) {
+                Some(true) => return true,
+                Some(false) => {}
+                None => return false,
+            },
+            Some(Ok(None)) | None => return false,
+            // Without watch access, poll the pod instead.
+            Some(Err(_)) => loop {
+                match api.get_opt(pod).await {
+                    Ok(Some(p)) => match log_source_state(&p, container) {
+                        Some(true) => return true,
+                        Some(false) => {}
+                        None => return false,
+                    },
+                    Ok(None) => return false,
+                    Err(_) => {}
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            },
+        }
+    }
+}
+
+/// `Some(true)` if the container runs, `Some(false)` if it can still start,
+/// `None` if it will not log again.
+pub(super) fn log_source_state(pod: &Pod, container: Option<&str>) -> Option<bool> {
+    let status = pod.status.as_ref();
+    if matches!(
+        status.and_then(|s| s.phase.as_deref()),
+        Some("Succeeded" | "Failed")
+    ) || pod.metadata.deletion_timestamp.is_some()
+    {
+        return None;
+    }
+    let spec = pod.spec.as_ref()?;
+    let name = container
+        .map(str::to_owned)
+        .or_else(|| {
+            pod.metadata
+                .annotations
+                .as_ref()?
+                .get("kubectl.kubernetes.io/default-container")
+                .cloned()
+        })
+        .or_else(|| spec.containers.first().map(|c| c.name.clone()))?;
+    let Some(state) = status
+        .and_then(|s| s.container_statuses.as_ref())
+        .and_then(|all| all.iter().find(|c| c.name == name))
+        .and_then(|c| c.state.as_ref())
+    else {
+        return Some(false);
+    };
+    if state.running.is_some() {
+        return Some(true);
+    }
+    if let Some(done) = &state.terminated {
+        match spec.restart_policy.as_deref() {
+            Some("Never") => return None,
+            Some("OnFailure") if done.exit_code == 0 => return None,
+            _ => {}
+        }
+    }
+    Some(false)
 }
 
 pub(super) async fn send_log_batch(

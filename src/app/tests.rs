@@ -11,6 +11,7 @@ mod clipboard;
 mod flux;
 mod kubeconfig;
 mod label_filter;
+mod log_reconnect;
 mod namespace_patterns;
 mod node_roles;
 mod oidc;
@@ -18,6 +19,7 @@ mod plugin_form;
 mod popup_wrapping;
 mod proxy;
 mod rbac;
+mod rediscovery;
 mod restart;
 mod rollout;
 mod scale;
@@ -33,13 +35,15 @@ fn test_app() -> (App, Receiver<Msg>) {
     let (tx, rx) = mpsc::channel(1024);
     let mut app = App::new(Cluster::fake(), tx);
     // Stub the port-forward spawner so tests don't require kubectl on PATH.
-    app.pf_spawner = |_argv| {
-        tokio::process::Command::new("sleep")
-            .arg("30")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
+    app.pf_spawner = |_client, _ns, _target, ports| {
+        let (local, _) = crate::portforward::parse_ports(ports)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
+        Ok(crate::portforward::Started {
+            task: tokio::spawn(std::future::pending()),
+            exit: Default::default(),
+            // A request for any free port reports the one it bound.
+            local: if local == 0 { 43210 } else { local },
+        })
     };
     (app, rx)
 }
@@ -2003,7 +2007,8 @@ async fn saved_forwards_show_as_stopped_until_running() {
         ns: "argocd".into(),
         target: "svc/argocd-server".into(),
         ports: "8080:443".into(),
-        child: spawn_test_child("sleep", "5"),
+        task: tokio::spawn(std::future::pending()),
+        exit: Default::default(),
     });
     assert!(app.forward_running("argocd"));
     let stopped: Vec<&str> = app
@@ -2254,7 +2259,7 @@ async fn port_forward_conflict_can_be_fixed_by_editing_only_the_local_port() {
 async fn port_forward_local_edit_preserves_input_after_spawn_failure() {
     let (mut app, _rx) = test_app();
     let successful_spawner = app.pf_spawner;
-    app.pf_spawner = |_| {
+    app.pf_spawner = |_, _, _, _| {
         Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "kubectl missing",
@@ -2417,7 +2422,7 @@ async fn port_forward_prompt_preserves_input_and_allows_correction() {
     app.handle_key(press(KeyCode::Enter)).unwrap();
     assert_eq!(app.mode, Mode::Table);
     assert_eq!(app.port_forwards.len(), 1);
-    assert_eq!(app.port_forwards[0].ports, ":80");
+    assert_eq!(app.port_forwards[0].ports, "43210:80");
 }
 
 #[tokio::test]
@@ -2638,7 +2643,8 @@ async fn has_port_forward_matches_context_cluster_url_and_kind() {
         ns: "default".into(),
         target: "svc/web".into(),
         ports: "8080:80".into(),
-        child: spawn_test_child("sleep", "30"),
+        task: tokio::spawn(std::future::pending()),
+        exit: Default::default(),
     });
 
     // Matching kind + ns + name → match.
@@ -2674,7 +2680,8 @@ async fn has_port_forward_pod_target_no_prefix() {
         ns: "default".into(),
         target: "pod/db".into(),
         ports: "5432:5432".into(),
-        child: spawn_test_child("sleep", "30"),
+        task: tokio::spawn(std::future::pending()),
+        exit: Default::default(),
     });
     // Pod target matches via pod/db spelling.
     assert!(app.has_port_forward("default", "db", "pods"));
@@ -2693,7 +2700,8 @@ async fn has_port_forward_matches_saved_pod_target_spelling() {
         ns: "default".into(),
         target: "pod/db".into(),
         ports: "5432:5432".into(),
-        child: spawn_test_child("sleep", "30"),
+        task: tokio::spawn(std::future::pending()),
+        exit: Default::default(),
     });
     assert!(app.has_port_forward("default", "db", "pods"));
     assert!(!app.has_port_forward("default", "db", "services"));
@@ -7967,16 +7975,6 @@ fn event_lines_show_core_event_fields() {
     assert!(lines[1].contains("4"));
 }
 
-fn spawn_test_child(argv0: &str, arg: &str) -> tokio::process::Child {
-    tokio::process::Command::new(argv0)
-        .arg(arg)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap_or_else(|e| panic!("spawn `{argv0} {arg}` for test: {e}"))
-}
-
 #[tokio::test]
 async fn stopping_a_forward_kills_only_that_one() {
     let (mut app, _rx) = test_app();
@@ -7987,7 +7985,8 @@ async fn stopping_a_forward_kills_only_that_one() {
         ns: "default".into(),
         target: "pod/a".into(),
         ports: "8080:80".into(),
-        child: spawn_test_child("sleep", "30"),
+        task: tokio::spawn(std::future::pending()),
+        exit: Default::default(),
     });
     app.port_forwards.push(PortForward {
         context: app.cluster.context.clone(),
@@ -7996,7 +7995,8 @@ async fn stopping_a_forward_kills_only_that_one() {
         ns: "default".into(),
         target: "pod/b".into(),
         ports: "8081:81".into(),
-        child: spawn_test_child("sleep", "30"),
+        task: tokio::spawn(std::future::pending()),
+        exit: Default::default(),
     });
     app.pf_state.select(Some(0));
     app.mode = Mode::PortForwards;
@@ -8015,8 +8015,14 @@ async fn stopping_a_forward_kills_only_that_one() {
 #[tokio::test]
 async fn reap_drops_exited_forwards_and_flashes() {
     let (mut app, _rx) = test_app();
-    let mut child = spawn_test_child("true", "");
-    child.wait().await.unwrap(); // let it exit before reaping
+    let exit = crate::portforward::Exit::default();
+    let reason = exit.clone();
+    let task = tokio::spawn(async move {
+        *reason.lock().unwrap() = Some("pod a no longer exists".into());
+    });
+    while !task.is_finished() {
+        tokio::task::yield_now().await;
+    }
     app.port_forwards.push(PortForward {
         context: app.cluster.context.clone(),
         cluster_url: app.cluster.cluster_url.clone(),
@@ -8024,11 +8030,16 @@ async fn reap_drops_exited_forwards_and_flashes() {
         ns: "default".into(),
         target: "pod/a".into(),
         ports: "8080:80".into(),
-        child,
+        task,
+        exit,
     });
     app.reap_port_forwards();
     assert!(app.port_forwards.is_empty());
-    assert!(app.flash.contains("exited"), "{}", app.flash);
+    assert!(
+        app.flash.contains("exited: pod a no longer exists"),
+        "{}",
+        app.flash
+    );
 }
 
 #[test]

@@ -231,47 +231,55 @@ pub enum Suspend {
     },
 }
 
-/// A `kubectl port-forward` running in the background (not `Suspend::Shell`
-/// — a forward is meant to keep running while you go do other things, unlike
-/// exec/edit which are inherently foreground-interactive). Killed on drop so
-/// a quit (or panic-unwind) never leaves an orphaned `kubectl` holding the
-/// local port open.
+/// API discovery started because `:` named no known resource.
+pub(super) struct Rediscovery {
+    pub(super) started: std::time::Instant,
+    /// The `:` input to open when discovery returns, with the view generation
+    /// it was typed in. Cleared once handled.
+    pub(super) pending: Option<(u64, String, Option<String>)>,
+}
+
+/// A port-forward running in the background, so it keeps running while you
+/// browse. Aborted on drop, so a quit never leaves the local port bound.
 pub struct PortForward {
     context: String,
     cluster_url: String,
     ns: String,
     target: String,
+    /// `LOCAL:REMOTE` with the bound local port, also when 0 was requested.
     ports: String,
     /// The `[[forwards]]` entry this instance was started from, if any —
-    /// links a running child back to its saved config in `:pf`.
+    /// links a running forward back to its saved config in `:pf`.
     pub(super) config_name: Option<String>,
-    child: tokio::process::Child,
+    task: tokio::task::JoinHandle<()>,
+    exit: crate::portforward::Exit,
 }
 
 impl PortForward {
     pub fn label(&self) -> String {
         format!("{} {} -n {}", self.target, self.ports, self.ns)
     }
+
+    /// Why the forward stopped, once it has.
+    fn exited(&self) -> Option<String> {
+        if !self.task.is_finished() {
+            return None;
+        }
+        let reason = self.exit.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        Some(reason.unwrap_or_else(|| "stopped".into()))
+    }
 }
 
 impl Drop for PortForward {
     fn drop(&mut self) {
-        let _ = self.child.start_kill();
+        self.task.abort();
     }
 }
 
-/// Spawns a background `kubectl port-forward` child. Overridable in tests
-/// so the unit suite doesn't require `kubectl` on PATH.
-type PortForwardSpawner = fn(&[String]) -> std::io::Result<tokio::process::Child>;
-
-fn default_pf_spawner(argv: &[String]) -> std::io::Result<tokio::process::Child> {
-    tokio::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-}
+/// Starts a port-forward: `(client, namespace, target, ports)`. Overridable
+/// in tests so the unit suite needs no cluster.
+type PortForwardSpawner =
+    fn(kube::Client, &str, &str, &str) -> std::io::Result<crate::portforward::Started>;
 
 /// How dependents are handled on delete (kubectl `--cascade`, k9s propagation
 /// picker). Cycled with `c` in the delete confirm dialog.
@@ -2200,11 +2208,9 @@ pub struct App {
     /// is launched from the table and returns there.
     pub(super) confirm_return: Mode,
 
-    /// Background `kubectl port-forward` processes started with `f`/`F`.
-    /// Viewed/stopped via `:pf`; killed automatically on drop.
+    /// Background port-forwards started with `f`/`F` or `[[forwards]]`.
+    /// Viewed/stopped via `:pf`; aborted automatically on drop.
     pub port_forwards: Vec<PortForward>,
-    /// Injectable spawner for `kubectl port-forward` children. Tests override
-    /// this to avoid depending on `kubectl` being on PATH.
     pf_spawner: PortForwardSpawner,
     pub pf_state: ListState,
     /// Port-forward picker (`f`): the declared ports of the selected object,
@@ -2346,6 +2352,8 @@ pub struct App {
     /// Lifecycle shared by notification watchers and their messages. Unlike
     /// the view generation, this advances only when the cluster context changes.
     pub(super) notify_epoch: u64,
+    /// The last API discovery run for an unknown `:` resource name.
+    pub(super) rediscovery: Option<Rediscovery>,
     /// Notifications waiting for the main loop to deliver (bell, desktop
     /// escape sequence, notifier subprocess). Drained once per frame and
     /// joined, so a burst arriving in one batch is one delivery — sinks
@@ -2590,7 +2598,7 @@ impl App {
             pvc_cfg: crate::config::PvcExploreConfig::default(),
             confirm_return: Mode::Table,
             port_forwards: Vec::new(),
-            pf_spawner: default_pf_spawner,
+            pf_spawner: crate::portforward::start,
             forwards_cfg: Vec::new(),
             pf_picker_items: Vec::new(),
             pf_picker_state: ListState::default(),
@@ -2665,6 +2673,7 @@ impl App {
             table_hit: RefCell::new(None),
             notify_tasks: HashMap::new(),
             notify_epoch: 0,
+            rediscovery: None,
             pending_notify: Vec::new(),
             prev_revisions: PrevRevisions::default(),
             timeline_target: None,
@@ -2784,6 +2793,7 @@ mod input;
 mod journal;
 mod lifecycle;
 mod logs;
+mod metrics_cadence;
 mod metrics_history;
 mod mouse;
 mod namespace_patterns;

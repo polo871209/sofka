@@ -252,9 +252,11 @@ fn log_viewport(c: &mut Criterion) {
         let (mut app, _rx) = bs::full_logs_app(5_000);
         app.logs.set_filter("reconcile".into());
         app.logs.refresh_index(wrap_width);
+        let mut next = 5_000;
         g.bench_function(BenchmarkId::new("trimming", label), |b| {
             b.iter(|| {
-                bs::feed_logs(&mut app, batch.clone());
+                bs::feed_logs(&mut app, bs::kubelet_lines(next, 50));
+                next += 50;
                 black_box(app.logs.refresh_index(wrap_width).total_rows())
             });
         });

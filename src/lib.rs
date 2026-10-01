@@ -39,6 +39,7 @@ pub mod plugin_catalog;
 pub mod plugin_cli;
 pub mod plugin_install;
 pub mod plugins;
+pub mod portforward;
 pub mod providers;
 pub mod pvcexplore;
 pub mod rbac;

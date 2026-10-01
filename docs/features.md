@@ -89,7 +89,7 @@ include those conditions. Row filters can search the route paths.
 - **Container trends** show CPU and memory for the selected container on wide
   screens. Each chart covers the last five minutes in five-second bins, with
   the newest sample on the right. The scale is zero to the largest visible
-  value. A dot marks a missing sample; measured zero has an empty bar.
+  value. A bin between two polls repeats the earlier sample for up to 60 seconds. A dot marks a failed poll or a longer gap. Measured zero has an empty bar.
   History starts while the container is selected and keeps at most 60 samples.
   It clears on a selection or view change, context change, or pod replacement.
   It uses the existing metrics polls and is not saved between sessions.
@@ -253,6 +253,7 @@ include those conditions. Row filters can search the route paths.
   navigation screen, then close back to the screen where they were opened.
   `→` fills the highlighted suggestion into the command so you can keep typing
   a namespace, `@context`, or `/filter`.
+  If a name matches no known resource, sofka runs API discovery again and opens the kind if it now exists. A CRD installed after sofka connected therefore opens without a restart. Discovery runs at most once every 10 seconds, so a typo costs at most one extra discovery request pair.
 - **Cross-context resource navigation** - `:pods @production-cluster default`
   switches context, resource, and namespace together without changing kubeconfig's
   `current-context`. Context names after `@` fuzzy-complete: Tab/Shift-Tab or
@@ -387,6 +388,7 @@ include those conditions. Row filters can search the route paths.
   Measured zero shows `0m`, `0Mi`, or `0%`. Missing metric values sort before
   measured values in ascending order and after them in descending order.
   All of it degrades cleanly when metrics-server isn't installed.
+  sofka reads the newest sample `timestamp` to learn how often metrics-server publishes (15 s upstream, 30 s on GKE). It polls once just before each sample is due and once more 2 s later if the sample is late, instead of every 5 seconds. Until it has seen a sample change, and when metrics-server stops publishing, it polls every 5 seconds.
 - **Configurable thresholds** for the RESTARTS/CPU/MEM/request-limit coloring,
   globally and per resource and per context. See
   [Views and thresholds](views.md#thresholds).
@@ -631,6 +633,7 @@ include those conditions. Row filters can search the route paths.
   `LOCAL:REMOTE` input. If the local port cannot bind to either loopback address, the input stays open
   and shows an error so you can choose another port. Active forwards show a teal `●` in a dedicated
   indicator column next to the row name. See [Saved forwards](plugins.md#saved-forwards).
+  sofka forwards through the Kubernetes API, so `kubectl` is not needed. Like `kubectl port-forward`, a forward to a service or workload picks one running pod when it starts. A local port of `0` picks a free port, and `:pf` shows the port that sofka bound. If the pod is deleted or finishes, the forward stops and the status bar shows why. Unlike `kubectl`, which keeps one connection and multiplexes, sofka opens a new API connection for each local connection. A pod that refuses one connection therefore does not end the forward, but each new connection takes longer to open. See the [port-forward benchmark](benchmark-ports.md#port-forward).
 - **File transfer** (`t` on a pod, or `t` in the container picker for one
   container) - download from or upload to a pod via `kubectl cp`, off-thread
   with a completion flash. Uploads are gated by the `transfer` guardrail and
@@ -649,7 +652,7 @@ include those conditions. Row filters can search the route paths.
   for the current kubelet log view. Lines with timestamps are sorted by time.
   Press `t` to show or hide timestamps without changing log order or restarting
   streams. If a container is waiting to start, sofka
-  retries until its logs are available. sofka parses ANSI color from the source app
+  retries until its logs are available. If a followed stream ends, for example because its container restarted, sofka waits until the container runs again and continues after the last line shown, without repeating lines. It stops when the pod is deleted or finished, or when the container will not restart. sofka parses ANSI color from the source app
   and maps it onto the active skin instead of printing literal escapes. See
   [Log controls](debugging.md#log-controls).
 - **Log severity filter** (`Ctrl+Z` in logs) shows detected warning and error

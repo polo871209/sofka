@@ -427,6 +427,12 @@ pub enum Msg {
         /// still wants to read as a "no".
         err: bool,
     },
+    /// API discovery finished for an unknown `:` resource name. `cluster`
+    /// is the context and server it ran against.
+    Rediscovered {
+        cluster: (String, String),
+        result: Result<crate::k8s::Rediscovery, String>,
+    },
     /// A panic in a background task, reported by the process panic hook.
     /// Deliberately generation-free: it must surface no matter which view is
     /// current.
