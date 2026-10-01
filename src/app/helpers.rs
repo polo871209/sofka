@@ -1,4 +1,5 @@
 use super::*;
+use crate::json::Pointer as _;
 
 // ----- free helpers ------------------------------------------------------
 
@@ -70,7 +71,7 @@ const ARGOCD_APPSYNC_STASH: &str = "sofka.io/argocd-applications-sync";
 pub(super) fn argocd_suspend_patch(obj: &DynamicObject, suspend: bool) -> Value {
     use base64::Engine;
     if suspend {
-        let stash = obj.data.pointer("/spec/syncPolicy/automated").map(|v| {
+        let stash = obj.data.at("/spec/syncPolicy/automated").map(|v| {
             base64::engine::general_purpose::STANDARD
                 .encode(serde_json::to_string(v).unwrap_or_default().as_bytes())
         });
@@ -115,7 +116,7 @@ pub(super) fn argocd_appset_suspend_patch(obj: &DynamicObject, suspend: bool) ->
     if suspend {
         let current = obj
             .data
-            .pointer("/spec/syncPolicy/applicationsSync")
+            .at("/spec/syncPolicy/applicationsSync")
             .and_then(Value::as_str)
             .unwrap_or("sync");
         let stash = base64::engine::general_purpose::STANDARD.encode(
@@ -215,11 +216,11 @@ pub(super) fn csr_decision_body(
 /// Whether approving `obj` hands out cluster access: a `client auth` cert
 /// from the kube-apiserver-client signer.
 fn csr_grants_cluster_access(obj: &DynamicObject) -> bool {
-    obj.data.pointer("/spec/signerName").and_then(Value::as_str)
+    obj.data.at("/spec/signerName").and_then(Value::as_str)
         == Some("kubernetes.io/kube-apiserver-client")
         && obj
             .data
-            .pointer("/spec/usages")
+            .at("/spec/usages")
             .and_then(Value::as_array)
             .is_some_and(|u| u.iter().any(|u| u.as_str() == Some("client auth")))
 }
@@ -241,7 +242,7 @@ pub(super) fn csr_confirm_label(approve: bool, objs: &[DynamicObject]) -> String
     let verb = if approve { "Approve" } else { "Deny" };
     let field = |o: &DynamicObject, path: &str| {
         o.data
-            .pointer(path)
+            .at(path)
             .and_then(Value::as_str)
             .unwrap_or("-")
             .to_string()
@@ -257,7 +258,7 @@ pub(super) fn csr_confirm_label(approve: bool, objs: &[DynamicObject]) -> String
     for o in objs {
         let usages = o
             .data
-            .pointer("/spec/usages")
+            .at("/spec/usages")
             .and_then(Value::as_array)
             .map(|u| {
                 u.iter()
@@ -284,12 +285,12 @@ pub(super) fn csr_confirm_label(approve: bool, objs: &[DynamicObject]) -> String
 /// no jobTemplate spec (not actually a CronJob).
 pub(super) fn cronjob_manual_job(cj: &DynamicObject, suffix: &str) -> Option<Value> {
     let name = cj.metadata.name.clone()?;
-    let spec = cj.data.pointer("/spec/jobTemplate/spec")?.clone();
+    let spec = cj.data.at("/spec/jobTemplate/spec")?.clone();
     // Re-key non-object annotations (invalid, but cluster data is untrusted
     // and `Value`'s IndexMut panics on a type mismatch).
     let mut annotations = cj
         .data
-        .pointer("/spec/jobTemplate/metadata/annotations")
+        .at("/spec/jobTemplate/metadata/annotations")
         .filter(|a| a.is_object())
         .cloned()
         .unwrap_or_else(|| json!({}));
@@ -301,7 +302,7 @@ pub(super) fn cronjob_manual_job(cj: &DynamicObject, suffix: &str) -> Option<Val
     if let Some(ns) = &cj.metadata.namespace {
         metadata["namespace"] = json!(ns);
     }
-    if let Some(labels) = cj.data.pointer("/spec/jobTemplate/metadata/labels") {
+    if let Some(labels) = cj.data.at("/spec/jobTemplate/metadata/labels") {
         metadata["labels"] = labels.clone();
     }
     if let Some(uid) = &cj.metadata.uid {
@@ -443,7 +444,7 @@ pub(super) fn drainable_pod(pod: &Pod) -> bool {
 /// Pick a version name to query a CRD's custom resources: the storage version
 /// if flagged, else the first served version, else the first listed.
 pub(super) fn crd_served_version(d: &Value) -> Option<String> {
-    let versions = d.pointer("/spec/versions")?.as_array()?;
+    let versions = d.at("/spec/versions")?.as_array()?;
     let pick = versions
         .iter()
         .find(|v| v.get("storage").and_then(Value::as_bool) == Some(true))
@@ -458,7 +459,7 @@ pub(super) fn crd_served_version(d: &Value) -> Option<String> {
 
 /// Build a complete workload selector or a Service's equality selector.
 pub(super) fn label_selector(obj: &DynamicObject, field: &str) -> Option<String> {
-    let value = obj.data.pointer("/spec/selector")?;
+    let value = obj.data.at("/spec/selector")?;
     if field == "matchLabels" {
         let selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector =
             serde_json::from_value(value.clone()).ok()?;
@@ -480,7 +481,7 @@ pub(super) fn label_selector(obj: &DynamicObject, field: &str) -> Option<String>
 pub(super) fn default_container(obj: &DynamicObject) -> Option<String> {
     annotated_container(obj).or_else(|| {
         obj.data
-            .pointer("/spec/containers/0/name")?
+            .at("/spec/containers/0/name")?
             .as_str()
             .map(str::to_owned)
     })
@@ -489,7 +490,7 @@ pub(super) fn default_container(obj: &DynamicObject) -> Option<String> {
 /// The `kubectl.kubernetes.io/default-container` annotation, only when it
 /// names a container in the spec.
 pub(super) fn annotated_container(obj: &DynamicObject) -> Option<String> {
-    let containers = obj.data.pointer("/spec/containers")?.as_array()?;
+    let containers = obj.data.at("/spec/containers")?.as_array()?;
     obj.metadata
         .annotations
         .as_ref()?
@@ -507,7 +508,7 @@ pub(super) fn container_names(obj: &DynamicObject) -> Vec<String> {
     for key in ["containers", "initContainers", "ephemeralContainers"] {
         if let Some(arr) = obj
             .data
-            .pointer(&format!("/spec/{key}"))
+            .at(&format!("/spec/{key}"))
             .and_then(Value::as_array)
         {
             for c in arr {
@@ -1004,11 +1005,11 @@ pub(super) fn xray_status(kind: &str, o: &DynamicObject) -> String {
         "job" => format!(
             "{}/{}",
             o.data
-                .pointer("/status/succeeded")
+                .at("/status/succeeded")
                 .and_then(Value::as_i64)
                 .unwrap_or(0),
             o.data
-                .pointer("/spec/completions")
+                .at("/spec/completions")
                 .and_then(Value::as_i64)
                 .unwrap_or(1)
                 .max(1),
@@ -1016,29 +1017,29 @@ pub(super) fn xray_status(kind: &str, o: &DynamicObject) -> String {
         "cronjob" => format!(
             "active {}",
             o.data
-                .pointer("/status/active")
+                .at("/status/active")
                 .and_then(Value::as_array)
                 .map_or(0, |items| items.len()),
         ),
         "deployment" | "replicaset" | "statefulset" => format!(
             "{}/{}",
             o.data
-                .pointer("/status/readyReplicas")
+                .at("/status/readyReplicas")
                 .and_then(Value::as_i64)
                 .unwrap_or(0),
             o.data
-                .pointer("/spec/replicas")
+                .at("/spec/replicas")
                 .and_then(Value::as_i64)
                 .unwrap_or(1),
         ),
         "daemonset" => format!(
             "{}/{}",
             o.data
-                .pointer("/status/numberReady")
+                .at("/status/numberReady")
                 .and_then(Value::as_i64)
                 .unwrap_or(0),
             o.data
-                .pointer("/status/desiredNumberScheduled")
+                .at("/status/desiredNumberScheduled")
                 .and_then(Value::as_i64)
                 .unwrap_or(0),
         ),
@@ -1153,7 +1154,7 @@ pub(super) fn prepend_warn_finding(
 
 pub(super) fn phase(o: &DynamicObject) -> String {
     o.data
-        .pointer("/status/phase")
+        .at("/status/phase")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
@@ -1161,7 +1162,7 @@ pub(super) fn phase(o: &DynamicObject) -> String {
 
 pub(super) fn node_ready(o: &DynamicObject) -> bool {
     o.data
-        .pointer("/status/conditions")
+        .at("/status/conditions")
         .and_then(Value::as_array)
         .map(|conds| {
             conds.iter().any(|c| {
@@ -1174,16 +1175,8 @@ pub(super) fn node_ready(o: &DynamicObject) -> bool {
 
 /// True when the two integer pointers are equal and non-zero (e.g. ready == desired).
 pub(super) fn ready_eq(o: &DynamicObject, ready_ptr: &str, want_ptr: &str) -> bool {
-    let r = o
-        .data
-        .pointer(ready_ptr)
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let w = o
-        .data
-        .pointer(want_ptr)
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+    let r = o.data.at(ready_ptr).and_then(Value::as_i64).unwrap_or(0);
+    let w = o.data.at(want_ptr).and_then(Value::as_i64).unwrap_or(0);
     w > 0 && r >= w
 }
 
@@ -1193,13 +1186,13 @@ pub(super) fn usage_of(obj: &DynamicObject, is_node: bool) -> (i64, i64) {
     if is_node {
         let cpu = obj
             .data
-            .pointer("/usage/cpu")
+            .at("/usage/cpu")
             .and_then(Value::as_str)
             .map(parse_cpu_milli)
             .unwrap_or(0);
         let mem = obj
             .data
-            .pointer("/usage/memory")
+            .at("/usage/memory")
             .and_then(Value::as_str)
             .map(parse_mem_bytes)
             .unwrap_or(0);
@@ -1207,12 +1200,12 @@ pub(super) fn usage_of(obj: &DynamicObject, is_node: bool) -> (i64, i64) {
     } else {
         let mut cpu = 0;
         let mut mem = 0;
-        if let Some(cs) = obj.data.pointer("/containers").and_then(Value::as_array) {
+        if let Some(cs) = obj.data.at("/containers").and_then(Value::as_array) {
             for c in cs {
-                if let Some(s) = c.pointer("/usage/cpu").and_then(Value::as_str) {
+                if let Some(s) = c.at("/usage/cpu").and_then(Value::as_str) {
                     cpu += parse_cpu_milli(s);
                 }
-                if let Some(s) = c.pointer("/usage/memory").and_then(Value::as_str) {
+                if let Some(s) = c.at("/usage/memory").and_then(Value::as_str) {
                     mem += parse_mem_bytes(s);
                 }
             }
@@ -1227,19 +1220,19 @@ pub(super) fn usage_of(obj: &DynamicObject, is_node: bool) -> (i64, i64) {
 pub(super) fn container_usage_of(obj: &DynamicObject) -> Vec<(String, (i64, i64))> {
     use crate::columns::{parse_cpu_milli, parse_mem_bytes};
     obj.data
-        .pointer("/containers")
+        .at("/containers")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|container| {
             let name = container.get("name")?.as_str()?.to_string();
             let cpu = container
-                .pointer("/usage/cpu")
+                .at("/usage/cpu")
                 .and_then(Value::as_str)
                 .map(parse_cpu_milli)
                 .unwrap_or(0);
             let memory = container
-                .pointer("/usage/memory")
+                .at("/usage/memory")
                 .and_then(Value::as_str)
                 .map(parse_mem_bytes)
                 .unwrap_or(0);
@@ -1259,7 +1252,7 @@ pub(super) fn container_resources_of(
     for key in ["containers", "initContainers", "ephemeralContainers"] {
         let Some(arr) = obj
             .data
-            .pointer(&format!("/spec/{key}"))
+            .at(&format!("/spec/{key}"))
             .and_then(Value::as_array)
         else {
             continue;
@@ -1280,18 +1273,14 @@ pub(super) fn container_resources_of(
 pub(super) fn qos_class(obj: &DynamicObject) -> String {
     if let Some(q) = obj
         .data
-        .pointer("/status/qosClass")
+        .at("/status/qosClass")
         .and_then(Value::as_str)
         .filter(|q| !q.is_empty())
     {
         return q.to_string();
     }
 
-    let Some(containers) = obj
-        .data
-        .pointer("/spec/containers")
-        .and_then(Value::as_array)
-    else {
+    let Some(containers) = obj.data.at("/spec/containers").and_then(Value::as_array) else {
         return String::new();
     };
     if containers.is_empty() {
@@ -1336,7 +1325,7 @@ pub(super) fn qos_class(obj: &DynamicObject) -> String {
 fn single_container_resources(c: &Value) -> crate::columns::ContainerResources {
     use crate::columns::{ContainerResources, parse_cpu_milli, parse_mem_bytes};
     let q = |section: &str, resource: &str, parse: fn(&str) -> i64| {
-        c.pointer(&format!("/resources/{section}/{resource}"))
+        c.at(&format!("/resources/{section}/{resource}"))
             .and_then(Value::as_str)
             .map(parse)
     };

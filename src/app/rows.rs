@@ -1,4 +1,5 @@
 use super::*;
+use crate::json::Pointer as _;
 
 impl App {
     /// Mark the cached row order/filter stale. Cheap; safe to over-call.
@@ -417,14 +418,14 @@ impl App {
                 "spec.nodename" => {
                     return o
                         .data
-                        .pointer("/spec/nodeName")
+                        .at("/spec/nodeName")
                         .and_then(|v| v.as_str())
                         .map(Cow::Borrowed);
                 }
                 "status.phase" => {
                     return o
                         .data
-                        .pointer("/status/phase")
+                        .at("/status/phase")
                         .and_then(|v| v.as_str())
                         .map(Cow::Borrowed);
                 }
@@ -1525,13 +1526,13 @@ fn pod_has_faults(o: &DynamicObject) -> bool {
         return true;
     }
     let d = &o.data;
-    match d.pointer("/status/phase").and_then(Value::as_str) {
+    match d.at("/status/phase").and_then(Value::as_str) {
         Some("Succeeded") => return false,
         Some("Running") => {}
         _ => return true,
     }
     let condition_ready = |kind: &str| {
-        d.pointer("/status/conditions")
+        d.at("/status/conditions")
             .and_then(Value::as_array)
             .is_some_and(|conditions| {
                 conditions.iter().any(|c| {
@@ -1543,7 +1544,7 @@ fn pod_has_faults(o: &DynamicObject) -> bool {
     if !condition_ready("Ready") {
         return true;
     }
-    if d.pointer("/spec/readinessGates")
+    if d.at("/spec/readinessGates")
         .and_then(Value::as_array)
         .is_some_and(|gates| {
             gates.iter().any(|gate| {
@@ -1555,29 +1556,26 @@ fn pod_has_faults(o: &DynamicObject) -> bool {
     {
         return true;
     }
-    let Some(statuses) = d
-        .pointer("/status/containerStatuses")
-        .and_then(Value::as_array)
-    else {
+    let Some(statuses) = d.at("/status/containerStatuses").and_then(Value::as_array) else {
         return true;
     };
     if statuses.is_empty()
         || statuses.iter().any(|c| {
             c.get("ready").and_then(Value::as_bool) != Some(true)
-                || c.pointer("/state/running").is_none()
+                || c.at("/state/running").is_none()
         })
-        || d.pointer("/spec/containers")
+        || d.at("/spec/containers")
             .and_then(Value::as_array)
             .is_some_and(|containers| containers.len() != statuses.len())
     {
         return true;
     }
-    d.pointer("/spec/initContainers")
+    d.at("/spec/initContainers")
         .and_then(Value::as_array)
         .is_some_and(|containers| {
             containers.iter().any(|container| {
                 let status = d
-                    .pointer("/status/initContainerStatuses")
+                    .at("/status/initContainerStatuses")
                     .and_then(Value::as_array)
                     .and_then(|statuses| {
                         statuses
@@ -1587,11 +1585,9 @@ fn pod_has_faults(o: &DynamicObject) -> bool {
                 status.is_none_or(|s| {
                     if container.get("restartPolicy").and_then(Value::as_str) == Some("Always") {
                         s.get("ready").and_then(Value::as_bool) != Some(true)
-                            || s.pointer("/state/running").is_none()
+                            || s.at("/state/running").is_none()
                     } else {
-                        s.pointer("/state/terminated/exitCode")
-                            .and_then(Value::as_i64)
-                            != Some(0)
+                        s.at("/state/terminated/exitCode").and_then(Value::as_i64) != Some(0)
                     }
                 })
             })

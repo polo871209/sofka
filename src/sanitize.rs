@@ -6,6 +6,7 @@
 //! apply unchanged — the only difference from an external package is that the
 //! adapter ships inside the binary instead of needing a runtime on PATH.
 
+use crate::json::Pointer as _;
 use anyhow::{Context, Result};
 use k8s_openapi::api::core::v1::Pod;
 use kube::Client;
@@ -65,9 +66,9 @@ fn wanted(states: &str) -> Option<Vec<&'static str>> {
 /// cleanup rules keep this distinction even when table status becomes more detailed.
 fn running(pod: &DynamicObject) -> bool {
     pod.data
-        .pointer("/status/containerStatuses")
+        .at("/status/containerStatuses")
         .and_then(Value::as_array)
-        .is_some_and(|cs| cs.iter().any(|c| c.pointer("/state/running").is_some()))
+        .is_some_and(|cs| cs.iter().any(|c| c.at("/state/running").is_some()))
 }
 
 /// Cleanup uses application state and pod phase, not display-only reason labels.
@@ -80,19 +81,17 @@ fn matches_states(pod: &DynamicObject, wanted: &[&str]) -> bool {
     let mut terminated = None;
     if let Some(statuses) = pod
         .data
-        .pointer("/status/containerStatuses")
+        .at("/status/containerStatuses")
         .and_then(Value::as_array)
     {
         for status in statuses {
-            if let Some(reason) = status
-                .pointer("/state/waiting/reason")
-                .and_then(Value::as_str)
+            if let Some(reason) = status.at("/state/waiting/reason").and_then(Value::as_str)
                 && (reason != "ContainerCreating" || waiting.is_none())
             {
                 waiting = Some(reason);
             }
             if let Some(reason) = status
-                .pointer("/state/terminated/reason")
+                .at("/state/terminated/reason")
                 .and_then(Value::as_str)
                 && reason != "Completed"
             {
@@ -102,7 +101,7 @@ fn matches_states(pod: &DynamicObject, wanted: &[&str]) -> bool {
     }
     let category = waiting
         .or(terminated)
-        .or_else(|| pod.data.pointer("/status/phase").and_then(Value::as_str))
+        .or_else(|| pod.data.at("/status/phase").and_then(Value::as_str))
         .unwrap_or("Unknown");
     wanted.contains(&category)
 }

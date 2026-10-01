@@ -1,4 +1,5 @@
 use super::*;
+use crate::json::Pointer as _;
 
 pub(crate) struct ContainerDetails {
     pub kind: &'static str,
@@ -21,10 +22,10 @@ fn container_details_of(obj: &DynamicObject) -> HashMap<String, ContainerDetails
             "ephemeral",
         ),
     ] {
-        let statuses = obj.data.pointer(&format!("/status/{status}"));
+        let statuses = obj.data.at(&format!("/status/{status}"));
         for container in obj
             .data
-            .pointer(&format!("/spec/{spec}"))
+            .at(&format!("/spec/{spec}"))
             .and_then(Value::as_array)
             .into_iter()
             .flatten()

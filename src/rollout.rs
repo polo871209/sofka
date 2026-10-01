@@ -10,6 +10,7 @@
 //! Rolling back works the way `kubectl rollout undo` does: it copies the
 //! revision's pod template onto the workload, and the controller rolls it out.
 
+use crate::json::Pointer as _;
 use kube::core::DynamicObject;
 use serde_json::{Map, Value, json};
 
@@ -113,8 +114,8 @@ pub fn revision(obj: &DynamicObject) -> Option<i64> {
 pub fn template(obj: &DynamicObject) -> Option<Value> {
     let mut template = obj
         .data
-        .pointer("/spec/template")
-        .or_else(|| obj.data.pointer("/data/spec/template"))?
+        .at("/spec/template")
+        .or_else(|| obj.data.at("/data/spec/template"))?
         .clone();
     if let Some(map) = template.as_object_mut() {
         map.remove("$patch");
@@ -141,7 +142,7 @@ pub fn images(obj: &DynamicObject) -> String {
         return String::new();
     };
     template
-        .pointer("/spec/containers")
+        .at("/spec/containers")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -209,14 +210,14 @@ pub fn undo_patch(workload: Workload, rev: &DynamicObject) -> Option<Value> {
 pub fn undo_blocker(workload: &DynamicObject, rev: &DynamicObject) -> Option<String> {
     if workload
         .data
-        .pointer("/spec/paused")
+        .at("/spec/paused")
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
         return Some("the deployment is paused; resume it before rolling back".into());
     }
     let revision = revision(rev).unwrap_or_default();
-    match (template(rev), workload.data.pointer("/spec/template")) {
+    match (template(rev), workload.data.at("/spec/template")) {
         (Some(target), Some(live)) if &target == live => Some(format!(
             "the current template already matches revision {revision}"
         )),

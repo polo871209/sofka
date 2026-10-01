@@ -12,6 +12,7 @@
 //! Only the Secret storage driver is supported (Helm's default; the
 //! ConfigMap driver is out of scope).
 
+use crate::json::Pointer as _;
 use std::io::Read;
 
 use base64::Engine;
@@ -148,7 +149,7 @@ pub fn parse_release_json(json: &[u8]) -> bool {
 fn release_json(secret: &DynamicObject) -> Option<Vec<u8>> {
     #[cfg(test)]
     RELEASE_DECODES.with(|count| count.set(count.get() + 1));
-    let wire = secret.data.pointer("/data/release")?.as_str()?;
+    let wire = secret.data.at("/data/release")?.as_str()?;
     let helm_encoded = BASE64.decode(wire).ok()?;
     let gzipped = BASE64.decode(helm_encoded).ok()?;
     let mut gz = flate2::read::GzDecoder::new(&gzipped[..]);
@@ -252,7 +253,7 @@ pub fn release_name(secret: &DynamicObject) -> Option<&str> {
 /// defaulting to the object's namespace.
 pub fn helmrelease_storage(obj: &DynamicObject) -> (String, String) {
     let name = obj.metadata.name.clone().unwrap_or_default();
-    let field = |p: &str| obj.data.pointer(p).and_then(Value::as_str);
+    let field = |p: &str| obj.data.at(p).and_then(Value::as_str);
     let release = match field("/spec/releaseName") {
         Some(r) => r.to_string(),
         None => match field("/spec/targetNamespace") {

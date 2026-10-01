@@ -9,6 +9,7 @@ mod metrics;
 pub(crate) use metrics::NO_LOAD;
 pub use metrics::{MetricColumn, NodeLoad, NodeLoads};
 
+use crate::json::Pointer as _;
 use std::borrow::Cow;
 use std::cell::OnceCell;
 
@@ -1236,7 +1237,7 @@ impl WorkloadCounts {
 pub fn pod_readiness_blocked(obj: &DynamicObject) -> bool {
     let conditions = obj
         .data
-        .pointer("/status/conditions")
+        .at("/status/conditions")
         .and_then(serde_json::Value::as_array);
     let condition = |name: &str| {
         conditions
@@ -1245,7 +1246,7 @@ pub fn pod_readiness_blocked(obj: &DynamicObject) -> bool {
     condition("Ready").is_some_and(|c| c["status"].as_str() != Some("True"))
         || obj
             .data
-            .pointer("/spec/readinessGates")
+            .at("/spec/readinessGates")
             .and_then(serde_json::Value::as_array)
             .is_some_and(|gates| {
                 gates.iter().any(|gate| {
@@ -1321,7 +1322,7 @@ fn condition_reason<'a>(d: &'a Value, ty: &str) -> Option<&'a str> {
 }
 
 fn condition<'a>(d: &'a Value, ty: &str) -> Option<&'a Value> {
-    d.pointer("/status/conditions")?
+    d.at("/status/conditions")?
         .as_array()?
         .iter()
         .find(|c| c.get("type").and_then(Value::as_str) == Some(ty))
@@ -1373,7 +1374,7 @@ pub(crate) fn csr_condition(data: &Value) -> String {
 }
 
 pub(crate) fn csr_condition_types(data: &Value) -> impl Iterator<Item = &str> {
-    data.pointer("/status/conditions")
+    data.at("/status/conditions")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -1463,7 +1464,7 @@ fn job_status(obj: &DynamicObject) -> &'static str {
         "Completed"
     } else if condition_is(d, "SuccessCriteriaMet", "True") {
         "Completing"
-    } else if d.pointer("/spec/suspend").and_then(Value::as_bool) == Some(true)
+    } else if d.at("/spec/suspend").and_then(Value::as_bool) == Some(true)
         || condition_is(d, "Suspended", "True")
     {
         "Suspended"
@@ -1855,7 +1856,7 @@ fn col_argocd_appset_generators<'a>(ctx: &CellContext<'a>) -> Cow<'a, str> {
 fn col_argocd_appset_apps<'a>(ctx: &CellContext<'a>) -> Cow<'a, str> {
     let n = ctx
         .data
-        .pointer("/status/resources")
+        .at("/status/resources")
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
@@ -1955,7 +1956,7 @@ fn service_type(d: &Value) -> &str {
 /// Comma-joined CRD version names (`spec.versions[].name`), e.g. `v1,v1beta1`.
 fn crd_versions(d: &Value) -> String {
     let names: Vec<&str> = d
-        .pointer("/spec/versions")
+        .at("/spec/versions")
         .and_then(Value::as_array)
         .map(|vs| {
             vs.iter()
@@ -1974,7 +1975,7 @@ fn crd_versions(d: &Value) -> String {
 /// most condition-based CRDs) maintain. Missing condition reads as Unknown —
 /// e.g. a Kustomization the controller hasn't reconciled yet.
 fn ready_condition(d: &Value) -> (&str, &str) {
-    d.pointer("/status/conditions")
+    d.at("/status/conditions")
         .and_then(Value::as_array)
         .and_then(|conds| {
             conds
@@ -1996,7 +1997,7 @@ fn ready_condition(d: &Value) -> (&str, &str) {
 fn flux_revision(d: &Value) -> &str {
     sget(d, &["status", "lastAppliedRevision"])
         .or_else(|| {
-            d.pointer("/status/history/0/chartVersion")
+            d.at("/status/history/0/chartVersion")
                 .and_then(Value::as_str)
         })
         .or_else(|| sget(d, &["status", "lastAttemptedRevision"]))
@@ -2114,7 +2115,7 @@ pub fn event_last_seen_secs(obj: &DynamicObject) -> Option<i64> {
     .iter()
     .find_map(|path| {
         obj.data
-            .pointer(path)?
+            .at(path)?
             .as_str()?
             .parse::<Timestamp>()
             .ok()
@@ -2203,7 +2204,7 @@ pub(crate) fn humanize(secs: i64) -> String {
 
 /// The array at `ptr`, or empty when the object does not carry it.
 fn array<'a>(d: &'a Value, ptr: &str) -> &'a [Value] {
-    d.pointer(ptr).and_then(Value::as_array).map_or(&[], |a| a)
+    d.at(ptr).and_then(Value::as_array).map_or(&[], |a| a)
 }
 
 /// Restartable init containers — native sidecars — from a pod spec. They run
@@ -2284,7 +2285,7 @@ fn pod_init_status(obj: &DynamicObject) -> Option<String> {
             continue;
         };
         if status
-            .pointer("/state/terminated/exitCode")
+            .at("/state/terminated/exitCode")
             .and_then(Value::as_i64)
             == Some(0)
         {
@@ -2293,16 +2294,14 @@ fn pod_init_status(obj: &DynamicObject) -> Option<String> {
         let sidecar = container.get("restartPolicy").and_then(Value::as_str) == Some("Always");
         if sidecar
             && (status.get("started").and_then(Value::as_bool) == Some(true)
-                || (status.get("started").is_none() && status.pointer("/state/running").is_some()))
+                || (status.get("started").is_none() && status.at("/state/running").is_some()))
         {
             continue;
         }
-        if let Some(terminated) = status.pointer("/state/terminated") {
+        if let Some(terminated) = status.at("/state/terminated") {
             return Some(format!("Init:{}", termination_reason(terminated)));
         }
-        if let Some(reason) = status
-            .pointer("/state/waiting/reason")
-            .and_then(Value::as_str)
+        if let Some(reason) = status.at("/state/waiting/reason").and_then(Value::as_str)
             && !reason.is_empty()
             && reason != "PodInitializing"
         {
@@ -2354,13 +2353,13 @@ pub fn pod_status(obj: &DynamicObject) -> String {
     let mut terminated_reason: Option<String> = None;
     let mut completed = false;
     for c in statuses {
-        if let Some(r) = c.pointer("/state/waiting/reason").and_then(Value::as_str)
+        if let Some(r) = c.at("/state/waiting/reason").and_then(Value::as_str)
             && !r.is_empty()
             && (r != "ContainerCreating" || waiting_reason.is_none())
         {
             waiting_reason = Some(r.to_string());
         }
-        if let Some(terminated) = c.pointer("/state/terminated") {
+        if let Some(terminated) = c.at("/state/terminated") {
             let reason = termination_reason(terminated);
             if reason == "Completed" {
                 completed = true;
@@ -2399,7 +2398,7 @@ fn external_ip(d: &Value, typ: &str) -> String {
     let mut ips = Vec::new();
     if typ == "LoadBalancer"
         && let Some(ingress) = d
-            .pointer("/status/loadBalancer/ingress")
+            .at("/status/loadBalancer/ingress")
             .and_then(Value::as_array)
     {
         for address in ingress {
@@ -2419,7 +2418,7 @@ fn external_ip(d: &Value, typ: &str) -> String {
             }
         }
     }
-    if let Some(external) = d.pointer("/spec/externalIPs").and_then(Value::as_array) {
+    if let Some(external) = d.at("/spec/externalIPs").and_then(Value::as_array) {
         for address in external
             .iter()
             .filter_map(Value::as_str)
@@ -2440,7 +2439,7 @@ fn external_ip(d: &Value, typ: &str) -> String {
 }
 
 fn svc_ports(d: &Value) -> String {
-    d.pointer("/spec/ports")
+    d.at("/spec/ports")
         .and_then(Value::as_array)
         .map(|ports| {
             ports
@@ -2462,7 +2461,7 @@ fn svc_ports(d: &Value) -> String {
 
 fn node_status(d: &Value) -> &'static str {
     let ready = d
-        .pointer("/status/conditions")
+        .at("/status/conditions")
         .and_then(Value::as_array)
         .and_then(|conds| {
             conds
@@ -2478,7 +2477,7 @@ fn node_status(d: &Value) -> &'static str {
         })
         .unwrap_or("Unknown");
 
-    if d.pointer("/spec/unschedulable").and_then(Value::as_bool) == Some(true) {
+    if d.at("/spec/unschedulable").and_then(Value::as_bool) == Some(true) {
         match ready {
             "Ready" => "Ready,SchedulingDisabled",
             "NotReady" => "NotReady,SchedulingDisabled",
@@ -2526,7 +2525,7 @@ fn node_roles(obj: &DynamicObject, sources: Option<&crate::config::NodeRoles>) -
 }
 
 fn ingress_hosts(d: &Value) -> String {
-    d.pointer("/spec/rules")
+    d.at("/spec/rules")
         .and_then(Value::as_array)
         .map(|rules| {
             rules
@@ -2540,7 +2539,7 @@ fn ingress_hosts(d: &Value) -> String {
 }
 
 fn ingress_address(d: &Value) -> String {
-    d.pointer("/status/loadBalancer/ingress")
+    d.at("/status/loadBalancer/ingress")
         .and_then(Value::as_array)
         .map(|ing| {
             ing.iter()
@@ -2558,7 +2557,7 @@ fn ingress_address(d: &Value) -> String {
 }
 
 fn httproute_hostnames(d: &Value) -> String {
-    d.pointer("/spec/hostnames")
+    d.at("/spec/hostnames")
         .and_then(Value::as_array)
         .map(|hosts| {
             hosts
@@ -2604,7 +2603,7 @@ fn httproute_routes(d: &Value) -> String {
 
 fn count_endpoints(d: &Value) -> Cow<'_, str> {
     let n: usize = d
-        .pointer("/subsets")
+        .at("/subsets")
         .and_then(Value::as_array)
         .map(|subs| {
             subs.iter()
@@ -2736,16 +2735,14 @@ fn hpa_targets(d: &Value) -> String {
         return format!("{current}/{target}%");
     }
 
-    let Some(metrics) = d.pointer("/spec/metrics").and_then(Value::as_array) else {
+    let Some(metrics) = d.at("/spec/metrics").and_then(Value::as_array) else {
         return "<none>".into();
     };
     if metrics.is_empty() {
         return "<none>".into();
     }
 
-    let current = d
-        .pointer("/status/currentMetrics")
-        .and_then(Value::as_array);
+    let current = d.at("/status/currentMetrics").and_then(Value::as_array);
     let mut targets: Vec<String> = metrics
         .iter()
         .zip(
@@ -2781,8 +2778,8 @@ fn hpa_metric(metric: &Value, current: Option<&Value>) -> String {
         default_name.to_string()
     } else {
         metric
-            .pointer(&format!("/{path}/name"))
-            .or_else(|| metric.pointer(&format!("/{path}/metric/name")))
+            .at(&format!("/{path}/name"))
+            .or_else(|| metric.at(&format!("/{path}/metric/name")))
             .and_then(Value::as_str)
             .unwrap_or(default_name)
             .to_string()
@@ -2790,14 +2787,14 @@ fn hpa_metric(metric: &Value, current: Option<&Value>) -> String {
     let target = if path.is_empty() {
         None
     } else {
-        metric.pointer(&format!("/{path}/target"))
+        metric.at(&format!("/{path}/target"))
     }
     .map(hpa_metric_value)
     .unwrap_or_else(|| "<target>".into());
     let current = if path.is_empty() {
         None
     } else {
-        current.and_then(|m| m.pointer(&format!("/{path}/current")))
+        current.and_then(|m| m.at(&format!("/{path}/current")))
     }
     .map(hpa_metric_value)
     .unwrap_or_else(|| "?".into());
@@ -2849,7 +2846,7 @@ pub(crate) fn parse_memory_quantity(s: &str) -> Option<i64> {
 pub fn node_allocatable(o: &DynamicObject) -> (Option<i64>, Option<i64>) {
     let read = |field: &str, parse: fn(&str) -> i64| {
         o.data
-            .pointer(&format!("/status/allocatable/{field}"))
+            .at(&format!("/status/allocatable/{field}"))
             .and_then(Value::as_str)
             .map(parse)
             .filter(|v| *v > 0)

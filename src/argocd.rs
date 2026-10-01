@@ -11,6 +11,7 @@
 //! This module is pure: it reads `DynamicObject`s and produces findings, so it
 //! is unit-tested without a cluster. The app layer gathers and renders.
 
+use crate::json::Pointer as _;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -216,7 +217,7 @@ pub struct Evidence {
 /// Borrowed, not owned: the fleet dashboard runs these over every Application
 /// in a cluster, and there can be thousands.
 fn str_at<'a>(d: &'a Value, p: &str) -> &'a str {
-    d.pointer(p).and_then(Value::as_str).unwrap_or_default()
+    d.at(p).and_then(Value::as_str).unwrap_or_default()
 }
 
 /// `status.sync.status`: `Synced`, `OutOfSync`, or `Unknown`.
@@ -276,7 +277,7 @@ pub fn sources(app: &DynamicObject) -> Vec<Source> {
             .to_string()
     };
     let listed = d
-        .pointer("/spec/sources")
+        .at("/spec/sources")
         .and_then(Value::as_array)
         .filter(|list| !list.is_empty());
     if let Some(list) = listed {
@@ -284,8 +285,8 @@ pub fn sources(app: &DynamicObject) -> Vec<Source> {
         // is the same fallback `revision` makes. Without it the first source
         // would show one and the rest none.
         let revisions = d
-            .pointer("/status/sync/revisions")
-            .or_else(|| d.pointer("/status/operationState/syncResult/revisions"))
+            .at("/status/sync/revisions")
+            .or_else(|| d.at("/status/operationState/syncResult/revisions"))
             .and_then(Value::as_array);
         return list
             .iter()
@@ -301,7 +302,7 @@ pub fn sources(app: &DynamicObject) -> Vec<Source> {
             })
             .collect();
     }
-    match d.pointer("/spec/source") {
+    match d.at("/spec/source") {
         Some(source) => vec![Source {
             repo_url: url(source),
             detail: source_detail(source),
@@ -314,7 +315,7 @@ pub fn sources(app: &DynamicObject) -> Vec<Source> {
 /// Whether the Application syncs on its own. See [`AutoSync`] for why this is
 /// three states rather than a boolean.
 pub fn auto_sync(app: &DynamicObject) -> AutoSync {
-    if let Some(automated) = app.data.pointer("/spec/syncPolicy/automated")
+    if let Some(automated) = app.data.at("/spec/syncPolicy/automated")
         && !automated.is_null()
     {
         let flag = |k: &str| automated.get(k).and_then(Value::as_bool).unwrap_or(false);
@@ -346,7 +347,7 @@ pub fn managed_resources(app: &DynamicObject) -> Vec<ManagedResource> {
             .to_string()
     };
     app.data
-        .pointer("/status/resources")
+        .at("/status/resources")
         .and_then(Value::as_array)
         .map(|rs| {
             rs.iter()
@@ -357,7 +358,7 @@ pub fn managed_resources(app: &DynamicObject) -> Vec<ManagedResource> {
                     name: s(r, "name"),
                     sync: s(r, "status"),
                     health: r
-                        .pointer("/health/status")
+                        .at("/health/status")
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string(),
@@ -384,7 +385,7 @@ pub fn applicationset_status(appset: &DynamicObject) -> &'static str {
     let is_true = |t: &str| {
         appset
             .data
-            .pointer("/status/conditions")
+            .at("/status/conditions")
             .and_then(Value::as_array)
             .is_some_and(|cs| {
                 cs.iter().any(|c| {
@@ -407,7 +408,7 @@ pub fn applicationset_status(appset: &DynamicObject) -> &'static str {
 fn applicationset_error(appset: &DynamicObject) -> Option<&str> {
     appset
         .data
-        .pointer("/status/conditions")
+        .at("/status/conditions")
         .and_then(Value::as_array)?
         .iter()
         .find(|c| {
@@ -424,7 +425,7 @@ fn applicationset_error(appset: &DynamicObject) -> Option<&str> {
 pub fn generators(appset: &DynamicObject) -> Vec<String> {
     appset
         .data
-        .pointer("/spec/generators")
+        .at("/spec/generators")
         .and_then(Value::as_array)
         .map(|gens| gens.iter().flat_map(generator_names).collect())
         .unwrap_or_default()
@@ -631,12 +632,12 @@ pub fn descendant_state(obj: &DynamicObject) -> Cow<'_, str> {
     // so a scaling ReplicaSet would otherwise read as fully ready.
     let desired = obj
         .data
-        .pointer("/spec/replicas")
-        .or_else(|| obj.data.pointer("/status/replicas"))
+        .at("/spec/replicas")
+        .or_else(|| obj.data.at("/status/replicas"))
         .and_then(Value::as_i64);
     let ready = obj
         .data
-        .pointer("/status/readyReplicas")
+        .at("/status/readyReplicas")
         .and_then(Value::as_i64)
         .unwrap_or(0);
     match desired {
@@ -648,16 +649,16 @@ pub fn descendant_state(obj: &DynamicObject) -> Cow<'_, str> {
 /// Whether `spec.replicas` is explicitly zero. An absent value defaults to one,
 /// and list responses omit per-item kinds, so the caller supplies the kind.
 pub fn scaled_to_zero(obj: &DynamicObject) -> bool {
-    obj.data.pointer("/spec/replicas").and_then(Value::as_i64) == Some(0)
+    obj.data.at("/spec/replicas").and_then(Value::as_i64) == Some(0)
 }
 
 /// The first container waiting reason, e.g. `CrashLoopBackOff`.
 fn waiting_reason(obj: &DynamicObject) -> Option<&str> {
     obj.data
-        .pointer("/status/containerStatuses")
+        .at("/status/containerStatuses")
         .and_then(Value::as_array)?
         .iter()
-        .find_map(|c| c.pointer("/state/waiting/reason").and_then(Value::as_str))
+        .find_map(|c| c.at("/state/waiting/reason").and_then(Value::as_str))
         .filter(|r| !r.is_empty())
 }
 
@@ -675,7 +676,7 @@ fn waiting_reason(obj: &DynamicObject) -> Option<&str> {
 fn job_state(obj: &DynamicObject) -> Option<&str> {
     let conditions = obj
         .data
-        .pointer("/status/conditions")
+        .at("/status/conditions")
         .and_then(Value::as_array)?;
     let is_true = |kind: &str| {
         conditions.iter().any(|c| {
@@ -702,7 +703,7 @@ pub fn manages(app: &DynamicObject, kind: &str, group: &str, namespace: &str, na
     // Reads `status.resources[]` in place: an Application can list hundreds of
     // resources, and this only needs to know whether one of them is ours.
     app.data
-        .pointer("/status/resources")
+        .at("/status/resources")
         .and_then(Value::as_array)
         .is_some_and(|rs| {
             rs.iter().any(|r| {
@@ -739,7 +740,7 @@ fn parse_instance(instance: &str, exact: bool) -> OwnerRef {
 fn primary_condition(app: &DynamicObject) -> Option<(String, String)> {
     let conds = app
         .data
-        .pointer("/status/conditions")
+        .at("/status/conditions")
         .and_then(Value::as_array)?;
     let read = |c: &Value| {
         (
@@ -957,10 +958,7 @@ fn headline(ev: &Evidence, app: &DynamicObject, sync: &str, health: &str, now: i
 /// field (older versions may not), it doesn't parse, or it is somehow ahead
 /// of `now` (clock skew, not a real case worth reporting as negative).
 pub fn health_since(app: &DynamicObject, now: i64) -> Option<String> {
-    let raw = app
-        .data
-        .pointer("/status/health/lastTransitionTime")?
-        .as_str()?;
+    let raw = app.data.at("/status/health/lastTransitionTime")?.as_str()?;
     let secs = raw.parse::<Timestamp>().ok()?.as_second();
     (now >= secs).then(|| humanize(now - secs))
 }

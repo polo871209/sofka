@@ -13,6 +13,7 @@
 //! lookback = "1h"
 //! ```
 
+use crate::json::Pointer as _;
 use serde_json::Value;
 
 /// A compiled link provider. Cheap to clone.
@@ -70,7 +71,7 @@ impl LogLink {
 /// The pod selector of `resource`, read from the object JSON. `None` for
 /// kinds without one; `Some(empty)` when the selector is empty.
 pub fn selector(resource: &str, obj: &Value) -> Option<Vec<Requirement>> {
-    let value = obj.pointer("/spec/selector")?;
+    let value = obj.at("/spec/selector")?;
     match resource {
         "services" => {
             let mut labels: Vec<(&String, &str)> = value
