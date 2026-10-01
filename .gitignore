@@ -1,12 +1,8 @@
 # Rust build artifacts
 /target
-/release-notices/
 __pycache__/
 /.venv/
 .pi*
-# Nix build output symlinks
-/result
-/result-*
 
 # macOS
 .DS_Store
@@ -24,7 +20,7 @@ __pycache__/
 *.swo
 *~
 
-# Nix / direnv
+# direnv
 .direnv/
 .envrc
 

@@ -738,13 +738,12 @@ fn verify_record(dir: &Path, record: &InstallationRecord) -> Result<(), String> 
     ))
 }
 
-/// Hash a file without reading it into memory: BLAKE3 maps it and hashes the
-/// pages across every core, which is the whole reason verification is cheap
-/// enough to run on every list, update, and removal.
+/// Hash a file without reading it into memory. BLAKE3 maps it, which keeps
+/// verification cheap enough to run on every list, update, and removal.
 fn digest_file(path: &Path) -> Result<String, String> {
     let mut hasher = blake3::Hasher::new();
     hasher
-        .update_mmap_rayon(path)
+        .update_mmap(path)
         .map_err(|e| format!("reading {}: {e}", path.display()))?;
     Ok(plugin_catalog::hex(hasher.finalize().as_bytes()))
 }

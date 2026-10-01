@@ -3,9 +3,6 @@
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
   "timezone": "Europe/Belgrade",
   "labels": ["dependencies"],
-  "nix": {
-    "enabled": true
-  },
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": ["before 4am on monday"]
@@ -18,10 +15,6 @@
     {
       "matchManagers": ["cargo"],
       "groupName": "rust dependencies"
-    },
-    {
-      "matchManagers": ["nix"],
-      "groupName": "nix dependencies"
     }
   ]
 }

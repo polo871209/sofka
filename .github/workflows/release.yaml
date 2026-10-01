@@ -1,173 +1,138 @@
 name: Release
 
+# Rolling personal build: every push to `polo` publishes a release tagged `v<Cargo.toml version>-polo.<run number>`, marks it as the GitHub latest release, and deletes every older release.
+# The upstream version keeps the tag out of the major-version range and changes when `polo` rebases onto a new upstream release.
+# The `-polo.` suffix keeps the tag apart from upstream version tags, and the run number makes every build unique and increasing for `mise up`.
 on:
-  release:
-    types: [published]
+  push:
+    branches: [polo]
+    # Files that the binary does not build from. `docs/` stays in: the binary embeds docs/*.md.
+    paths-ignore:
+      - "*.md"
+      - "LICENSE-*"
+      - ".github/workflows/ci.yaml"
+      - ".github/workflows/sync-upstream.yaml"
+      - ".github/FUNDING.yml"
+      - ".just/**"
+      - "Justfile"
+      - ".lefthook.toml"
+      - ".oxfmtrc.json"
+      - "benches/**"
+      - "mise.toml"
+      - "renovate.json"
+      - "scripts/**"
+  workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
+# Only the newest commit matters, so a new push cancels the build in flight.
 concurrency:
-  group: release-${{ github.event.release.tag_name }}
-  cancel-in-progress: false
+  group: release
+  cancel-in-progress: true
 
 jobs:
-  validate:
-    runs-on: ubuntu-latest
-    env:
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
-    steps:
-      - name: Checkout release tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-          persist-credentials: false
-
-      - name: Validate tag and Cargo version
-        run: |
-          version="${RELEASE_TAG#v}"
-          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::'$RELEASE_TAG' is not a release tag like v0.2.0"
-            exit 1
-          fi
-
-          cargo_version="$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)"
-          if [[ "$cargo_version" != "$version" ]]; then
-            echo "::error::Cargo.toml version '$cargo_version' does not match '$RELEASE_TAG'"
-            exit 1
-          fi
-
   build:
-    needs: validate
-    uses: $/.github/workflows/release-packages.yaml
-
-  upload-assets:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # gh release upload
-      id-token: write
-      attestations: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
-    steps:
-      - name: Checkout release tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-          persist-credentials: false
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          path: dist
-          pattern: binary-*
-          merge-multiple: true
-
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          version: "0.12.20"
-          python-version: "3.12"
-
-      - name: Verify all target SBOMs
-        run: uv run --locked python scripts/release_packages.py verify-sboms --directory dist --version "${RELEASE_TAG#v}"
-
-      - name: Generate checksums
-        working-directory: dist
-        run: shasum -a 256 -- *.tar.gz *.zip *.deb *.rpm *.apk *.pkg.tar.zst *.spdx.json > SHA256SUMS
-
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: |
-            dist/*.tar.gz
-            dist/*.zip
-            dist/*.deb
-            dist/*.rpm
-            dist/*.apk
-            dist/*.pkg.tar.zst
-            dist/*.spdx.json
-
-      - name: Upload release assets
-        run: gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/*.apk dist/*.pkg.tar.zst dist/*.spdx.json dist/SHA256SUMS --clobber
-
-  # Kick the tap's bump workflow so `brew install nklmilojevic/sofka/sofka`
-  # picks up the new version immediately instead of waiting for the tap's
-  # 6-hourly cron (which stays as the fallback). Needs TAP_GITHUB_TOKEN, a
-  # fine-grained PAT scoped to homebrew-sofka with Actions read/write.
-  homebrew-bump:
-    needs: upload-assets
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
-    steps:
-      - name: Dispatch tap bump
-        run: |
-          gh workflow run bump.yaml \
-            -R nklmilojevic/homebrew-sofka \
-            -f tag="$RELEASE_TAG"
-
-  crates-publish:
-    needs: upload-assets
-    runs-on: ubuntu-latest
-    environment: release
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    # The first run has no cache and builds every dependency.
+    timeout-minutes: 60
     permissions:
       contents: read
-      id-token: write
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
     env:
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      # Overrides the Cargo.toml release profile (thin LTO, 1 codegen unit, which Cargo.toml prices at about 2.5 min of build time). The cost is a larger binary.
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      # mise picks the asset by the OS and architecture in its name.
+      ASSET: sofka-${{ matrix.target }}.tar.gz
     steps:
-      - name: Checkout release tag
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: ${{ matrix.target }}
 
-      - name: Authenticate to crates.io
-        id: auth
-        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+      # Restores compiled dependencies, so a push rebuilds only the sofka crate.
+      - name: Cache cargo registry/build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-${{ matrix.target }}
+          cache-on-failure: true
 
-      - name: Publish to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish --locked
+      - name: Build
+        run: cargo build --release --locked --bin sofka --target "${{ matrix.target }}"
 
-  # Warms the nkl-sofka Cachix cache for the tagged rev, so `nix build
-  # github:nklmilojevic/sofka?ref=vX.Y.Z` is instant for anyone consuming
-  # this tag afterward.
-  nix-cache:
-    needs: validate
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-          - os: ubuntu-24.04-arm
-          - os: macos-latest
-          - os: macos-15-intel
-    runs-on: ${{ matrix.os }}
+      - name: Package
+        run: |
+          tar -czf "$ASSET" -C "target/${{ matrix.target }}/release" sofka -C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE README.md
+          shasum -a 256 "$ASSET" > "$ASSET.sha256"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET }}.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release and its tag, upload the assets, delete old releases
     env:
-      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
-      - name: Checkout release tag
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
 
-      - name: Setup Nix
-        uses: ./.github/actions/setup-nix # zizmor: ignore[self-repository]
+      - name: Compute the tag
+        id: tag
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "sofka") | .version')"
+          test -n "$version" || { echo "::error::no sofka version in Cargo.toml"; exit 1; }
+          echo "tag=v${version}-polo.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
-      # CI no longer runs any Nix job, so this is where flake/packaging
-      # breakage surfaces.
-      - name: Flake check
-        run: nix flake check --no-build
+      - name: Download the archives
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: dist
+          merge-multiple: true
 
-      - name: Build and cache
-        run: nix build .#sofka --print-build-logs
+      - name: Publish the release
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # A manual re-run keeps the run number, so it finds the tag already released.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "$TAG" --notes "Rolling build of ${GITHUB_SHA}." --latest
+          fi
+
+      # Older tags such as v4 sort above v0.x in mise, so every older release must go.
+      - name: Delete older releases
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          for old in $(gh release list --limit 100 --json tagName -q '.[].tagName' | grep -vx "$TAG"); do
+            gh release delete "$old" --yes
+            # --cleanup-tag fails with HTTP 422 when the tag is already gone, so delete the tag only if it exists.
+            if gh api "repos/${GH_REPO}/git/ref/tags/${old}" --silent 2>/dev/null; then
+              gh api --method DELETE "repos/${GH_REPO}/git/refs/tags/${old}"
+            fi
+          done

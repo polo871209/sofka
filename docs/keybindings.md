@@ -133,8 +133,8 @@ backup is never overwritten. Each base, cluster, or context file is converted
 before the settings are merged, so override order stays the same.
 
 If a file cannot be updated, sofka shows a warning and uses the converted keys
-in memory. Symlinks and read-only files are left intact. For a Nix-managed
-config, update the Nix source to use `[keys.command]`. The warning includes the
+in memory. Symlinks and read-only files are left intact. If another tool
+manages the config, update its source to use `[keys.command]`. The warning includes the
 field mapping. After a manual change, use `:reload`.
 
 If legacy and scoped keys define the same action in one file, or a legacy value is
