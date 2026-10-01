@@ -1,4 +1,5 @@
 use super::*;
+use crate::json::Pointer as _;
 
 use crate::fleet::{FleetRow, FleetStatus};
 
@@ -355,7 +356,7 @@ fn pod_healthy(o: &DynamicObject) -> bool {
         "Succeeded" => true,
         "Running" => o
             .data
-            .pointer("/status/conditions")
+            .at("/status/conditions")
             .and_then(Value::as_array)
             .is_some_and(|cs| {
                 cs.iter().any(|c| {
@@ -371,7 +372,7 @@ fn pod_healthy(o: &DynamicObject) -> bool {
 /// (a failing Flux reconciliation).
 fn ready_is_false(o: &DynamicObject) -> bool {
     o.data
-        .pointer("/status/conditions")
+        .at("/status/conditions")
         .and_then(Value::as_array)
         .is_some_and(|cs| {
             cs.iter().any(|c| {

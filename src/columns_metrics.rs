@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Mutex, PoisonError};
 
+use crate::json::Pointer as _;
 use kube::core::DynamicObject;
 use serde_json::Value;
 
@@ -196,7 +197,7 @@ fn quantity_milli(s: &str) -> Option<i128> {
 
 fn allocatable(obj: &DynamicObject, resource: &str) -> Option<i128> {
     obj.data
-        .pointer("/status/allocatable")?
+        .at("/status/allocatable")?
         .get(resource)?
         .as_str()
         .and_then(quantity_milli)
@@ -246,7 +247,7 @@ struct PodLoad {
 
 impl PodLoad {
     fn of(pod: &DynamicObject) -> Option<Self> {
-        let node = pod.data.pointer("/spec/nodeName")?.as_str()?.to_string();
+        let node = pod.data.at("/spec/nodeName")?.as_str()?.to_string();
         Some(Self {
             node,
             requests: pod_effective(pod, "requests"),
@@ -357,7 +358,7 @@ fn pod_effective(pod: &DynamicObject, section: &str) -> BTreeMap<String, i128> {
     };
     let containers = |path: &str| {
         pod.data
-            .pointer(path)
+            .at(path)
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
@@ -379,12 +380,12 @@ fn pod_effective(pod: &DynamicObject, section: &str) -> BTreeMap<String, i128> {
         max(&mut init_peak, &step);
     }
     max(&mut total, &init_peak);
-    for (k, v) in read(pod.data.pointer("/spec/resources")) {
+    for (k, v) in read(pod.data.at("/spec/resources")) {
         if matches!(k.as_str(), "cpu" | "memory") || k.starts_with("hugepages-") {
             total.insert(k, v);
         }
     }
-    for (k, v) in quantities(pod.data.pointer("/spec/overhead")) {
+    for (k, v) in quantities(pod.data.at("/spec/overhead")) {
         if section == "requests" || total.contains_key(&k) {
             let slot = total.entry(k).or_insert(0);
             *slot = slot.saturating_add(v);
@@ -412,13 +413,13 @@ fn pod_resource(obj: &DynamicObject, cpu: bool, limit: bool) -> Option<i64> {
         parse_mem_bytes
     };
     let read = |resources: &Value| resources.get(section)?.get(resource)?.as_str().map(parse);
-    if let Some(value) = obj.data.pointer("/spec/resources").and_then(read) {
+    if let Some(value) = obj.data.at("/spec/resources").and_then(read) {
         return Some(value);
     }
-    let containers = obj.data.pointer("/spec/containers")?.as_array()?;
+    let containers = obj.data.at("/spec/containers")?.as_array()?;
     let sidecars = obj
         .data
-        .pointer("/spec/initContainers")
+        .at("/spec/initContainers")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()

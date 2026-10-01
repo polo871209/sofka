@@ -10,6 +10,7 @@
 //! load time; problems become warnings, never panics, so a bad view can't
 //! take down the TUI.
 
+use crate::json::Pointer as _;
 use std::collections::HashMap;
 
 use k8s_openapi::jiff::Timestamp;
@@ -857,7 +858,7 @@ pub(crate) fn extract_ref<'a>(obj: &'a DynamicObject, pointer: &str) -> Option<E
         "/kind" => return obj.types.as_ref().map(|t| Extracted::Text(t.kind.as_str())),
         _ => {}
     }
-    obj.data.pointer(pointer).map(Extracted::Json)
+    obj.data.at(pointer).map(Extracted::Json)
 }
 
 /// Resolve metadata without serializing the entire `ObjectMeta` for every
@@ -887,7 +888,7 @@ fn extract_metadata<'a>(meta: &'a kube::core::ObjectMeta, rest: &str) -> Option<
             if tail.is_empty() {
                 Some(Extracted::Owned(value))
             } else {
-                value.pointer(tail).cloned().map(Extracted::Owned)
+                value.at(tail).cloned().map(Extracted::Owned)
             }
         }};
     }
@@ -1034,7 +1035,7 @@ fn condition_value<'a>(
     field: &str,
 ) -> Option<&'a Value> {
     obj.data
-        .pointer("/status/conditions")?
+        .at("/status/conditions")?
         .as_array()?
         .iter()
         .filter(|c| c.get(selector.field()).and_then(Value::as_str) == Some(value))
@@ -1175,7 +1176,7 @@ pub fn parse_quantity(s: &str) -> Option<f64> {
 /// output field. Other filters and wildcards are skipped. Columns with
 /// priority above zero appear only in wide mode, like kubectl's `-o wide`.
 pub fn printer_columns_view(crd: &Value, version: &str) -> Option<View> {
-    let versions = crd.pointer("/spec/versions")?.as_array()?;
+    let versions = crd.at("/spec/versions")?.as_array()?;
     let ver = versions
         .iter()
         .find(|v| v.get("name").and_then(Value::as_str) == Some(version))?;
@@ -2425,7 +2426,7 @@ mod tests {
             let expected = if rest.is_empty() {
                 Some(serialized.clone())
             } else {
-                serialized.pointer(rest).cloned()
+                serialized.at(rest).cloned()
             };
             assert_eq!(extract(&o, pointer), expected, "pointer {pointer}");
         }

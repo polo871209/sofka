@@ -387,12 +387,12 @@ impl LogsView {
                     );
                 }
             }
+            self.truncate_index(index);
             for marker in &mut self.markers {
                 if *marker > self.line_offset + index {
                     *marker += 1;
                 }
             }
-            self.view.revision = self.view.revision.wrapping_add(1);
         }
         self.line_meta.insert(index, meta);
         self.view.lines.insert(index, line);

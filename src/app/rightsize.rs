@@ -1,4 +1,5 @@
 use super::*;
+use crate::json::Pointer as _;
 
 use crate::columns::{fmt_cpu, fmt_mem, parse_cpu_milli, parse_mem_bytes};
 use crate::rightsize::{ContainerRec, PatchTarget, Quantiles, patch_preview, suggest};
@@ -270,13 +271,13 @@ fn render_report(
 /// for workloads).
 fn container_specs(obj: &DynamicObject, path: &str) -> Vec<ContainerSpec> {
     obj.data
-        .pointer(path)
+        .at(path)
         .and_then(Value::as_array)
         .map(|arr| {
             arr.iter()
                 .filter_map(|c| {
                     let name = c.get("name").and_then(Value::as_str)?.to_string();
-                    let req = c.pointer("/resources/requests");
+                    let req = c.at("/resources/requests");
                     let cpu_request = req
                         .and_then(|r| r.get("cpu"))
                         .and_then(Value::as_str)

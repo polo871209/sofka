@@ -13,6 +13,7 @@
 //! evidence and renders the findings; [`Finding::target`] lets the view jump
 //! straight to the resource behind a line.
 
+use crate::json::Pointer as _;
 use kube::core::DynamicObject;
 use serde_json::Value;
 
@@ -338,7 +339,7 @@ fn job_state(job: &DynamicObject) -> (Level, String) {
     if is_true("Complete").is_some() || is_true("SuccessCriteriaMet").is_some() {
         return (Level::Good, "succeeded".into());
     }
-    let suspended = job.data.pointer("/spec/suspend").and_then(Value::as_bool) == Some(true);
+    let suspended = job.data.at("/spec/suspend").and_then(Value::as_bool) == Some(true);
     if suspended || is_true("Suspended").is_some() {
         return (Level::Warn, "suspended".into());
     }
@@ -362,7 +363,7 @@ fn explain_job(ev: &Evidence, name: &str, out: &mut Vec<Finding>) {
             .flat_map(|p| {
                 ["/status/containerStatuses", "/status/initContainerStatuses"]
                     .into_iter()
-                    .filter_map(|path| p.data.pointer(path).and_then(Value::as_array))
+                    .filter_map(|path| p.data.at(path).and_then(Value::as_array))
                     .flatten()
             })
             .filter_map(|cs| cs.get("restartCount").and_then(Value::as_i64))
@@ -425,7 +426,7 @@ fn explain_job(ev: &Evidence, name: &str, out: &mut Vec<Finding>) {
 
 fn explain_cronjob(ev: &Evidence, name: &str, out: &mut Vec<Finding>) {
     let d = &ev.obj.data;
-    let suspended = d.pointer("/spec/suspend").and_then(Value::as_bool) == Some(true);
+    let suspended = d.at("/spec/suspend").and_then(Value::as_bool) == Some(true);
     let mut jobs: Vec<&DynamicObject> = ev.related.iter().collect();
     // Newest first.
     jobs.sort_by_key(|j| std::cmp::Reverse(j.metadata.creation_timestamp.as_ref().map(|t| t.0)));
@@ -485,7 +486,7 @@ fn explain_cronjob(ev: &Evidence, name: &str, out: &mut Vec<Finding>) {
         None => {}
     }
     let active = d
-        .pointer("/status/active")
+        .at("/status/active")
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
     if active > 0 && ptr_str(d, "/spec/concurrencyPolicy") == Some("Forbid") {
@@ -532,7 +533,7 @@ fn explain_pvc(ev: &Evidence, name: &str, out: &mut Vec<Finding>) {
     let phase = ptr_str(d, "/status/phase").unwrap_or("Pending");
     let volume = ptr_str(d, "/spec/volumeName").filter(|v| !v.is_empty());
     let modes: Vec<&str> = d
-        .pointer("/spec/accessModes")
+        .at("/spec/accessModes")
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
@@ -815,9 +816,9 @@ fn explain_node(ev: &Evidence, name: &str, out: &mut Vec<Finding>) {
         }
     }
 
-    let cordoned = d.pointer("/spec/unschedulable").and_then(Value::as_bool) == Some(true);
+    let cordoned = d.at("/spec/unschedulable").and_then(Value::as_bool) == Some(true);
     let taints: Vec<&Value> = d
-        .pointer("/spec/taints")
+        .at("/spec/taints")
         .and_then(Value::as_array)
         .map(|a| a.iter().collect())
         .unwrap_or_default();
@@ -1104,7 +1105,7 @@ fn pod_problems(pod: &DynamicObject) -> Vec<(Level, String)> {
 
 /// `(reason, exitCode)` of a container's last termination, if any.
 fn last_termination(cs: &Value) -> Option<(String, i64)> {
-    let term = cs.pointer("/lastState/terminated")?;
+    let term = cs.at("/lastState/terminated")?;
     let reason = term
         .get("reason")
         .and_then(Value::as_str)
@@ -1118,7 +1119,7 @@ fn last_termination(cs: &Value) -> Option<(String, i64)> {
 
 fn container_statuses(pod: &DynamicObject) -> Vec<&Value> {
     pod.data
-        .pointer("/status/containerStatuses")
+        .at("/status/containerStatuses")
         .and_then(Value::as_array)
         .map(|a| a.iter().collect())
         .unwrap_or_default()
@@ -1126,7 +1127,7 @@ fn container_statuses(pod: &DynamicObject) -> Vec<&Value> {
 
 fn conditions(obj: &DynamicObject) -> Vec<&Value> {
     obj.data
-        .pointer("/status/conditions")
+        .at("/status/conditions")
         .and_then(Value::as_array)
         .map(|a| a.iter().collect())
         .unwrap_or_default()
@@ -1143,11 +1144,11 @@ fn cstr<'a>(cond: &'a Value, key: &str) -> &'a str {
 }
 
 fn ptr_str<'a>(v: &'a Value, p: &str) -> Option<&'a str> {
-    v.pointer(p).and_then(Value::as_str)
+    v.at(p).and_then(Value::as_str)
 }
 
 fn ptr_i64(v: &Value, p: &str) -> Option<i64> {
-    v.pointer(p).and_then(Value::as_i64)
+    v.at(p).and_then(Value::as_i64)
 }
 
 /// Join a condition's reason and message into `Reason: message`, dropping

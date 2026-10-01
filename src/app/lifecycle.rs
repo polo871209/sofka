@@ -986,6 +986,18 @@ impl App {
     /// message that opens a document view (a finished describe, a plugin
     /// report, a bundle) can displace the PVC browser without a keystroke
     /// being involved at all.
+    /// Handle every queued message, then restore a faults-filter selection
+    /// once. Restoring it needs a full row rebuild, so doing that per watch
+    /// event made a busy batch cost one rebuild per event.
+    pub fn handle_msgs(&mut self, msgs: impl IntoIterator<Item = Msg>) {
+        self.batching_msgs = true;
+        for msg in msgs {
+            self.handle_msg(msg);
+        }
+        self.batching_msgs = false;
+        self.restore_faults_selection();
+    }
+
     pub fn handle_msg(&mut self, msg: Msg) {
         let refresh_containers = match &msg {
             Msg::Applied {
@@ -1035,12 +1047,12 @@ impl App {
                     | Msg::Synced { generation }
                     if *generation == self.generation
             );
-        let selected_pod = if preserve_selection {
-            self.selected_ref()
-                .map(|o| (crate::store::row_key(o), o.metadata.uid.clone()))
-        } else {
-            None
-        };
+        if preserve_selection && self.faults_selection.is_none() {
+            let selected = self
+                .selected_ref()
+                .map(|o| (crate::store::row_key(o), o.metadata.uid.clone()));
+            self.faults_selection = Some(selected);
+        }
         match msg {
             Msg::NamespacePattern {
                 generation,
@@ -2104,19 +2116,26 @@ impl App {
             }
             _ => {} // stale generation, drop
         }
-        if preserve_selection {
-            let index = selected_pod.and_then(|(key, uid)| {
-                self.ensure_rows_cache();
-                if self.store.get(&key)?.metadata.uid != uid {
-                    return None;
-                }
-                self.rows_cache
-                    .borrow()
-                    .keys
-                    .iter()
-                    .position(|k| k.as_ref() == key)
-            });
-            self.table_state.select(index);
+        if !self.batching_msgs {
+            self.restore_faults_selection();
         }
+    }
+
+    fn restore_faults_selection(&mut self) {
+        let Some(selected) = self.faults_selection.take() else {
+            return;
+        };
+        let index = selected.and_then(|(key, uid)| {
+            self.ensure_rows_cache();
+            if self.store.get(&key)?.metadata.uid != uid {
+                return None;
+            }
+            self.rows_cache
+                .borrow()
+                .keys
+                .iter()
+                .position(|k| k.as_ref() == key)
+        });
+        self.table_state.select(index);
     }
 }

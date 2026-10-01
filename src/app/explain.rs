@@ -1,4 +1,5 @@
 use super::*;
+use crate::json::Pointer as _;
 
 impl App {
     /// Open the deterministic "why is this unhealthy?" view for the selection.
@@ -407,11 +408,11 @@ fn owned_by(objects: Vec<DynamicObject>, owner: &DynamicObject) -> Vec<DynamicOb
 /// Whether `pod` mounts the PersistentVolumeClaim `claim`.
 fn mounts_claim(pod: &DynamicObject, claim: &str) -> bool {
     pod.data
-        .pointer("/spec/volumes")
+        .at("/spec/volumes")
         .and_then(Value::as_array)
         .is_some_and(|volumes| {
             volumes.iter().any(|v| {
-                v.pointer("/persistentVolumeClaim/claimName")
+                v.at("/persistentVolumeClaim/claimName")
                     .and_then(Value::as_str)
                     == Some(claim)
             })

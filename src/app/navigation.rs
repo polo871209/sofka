@@ -1,4 +1,5 @@
 use super::*;
+use crate::json::Pointer as _;
 
 impl App {
     fn retain_filter_selectors(&mut self) {
@@ -276,20 +277,17 @@ impl App {
     /// spec if discovery didn't surface it.
     pub(super) fn drill_into_crd(&mut self, obj: &DynamicObject) {
         let d = &obj.data;
-        let group = d
-            .pointer("/spec/group")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let group = d.at("/spec/group").and_then(Value::as_str).unwrap_or("");
         let plural = d
-            .pointer("/spec/names/plural")
+            .at("/spec/names/plural")
             .and_then(Value::as_str)
             .unwrap_or("");
         let ckind = d
-            .pointer("/spec/names/kind")
+            .at("/spec/names/kind")
             .and_then(Value::as_str)
             .unwrap_or("");
         let scope = d
-            .pointer("/spec/scope")
+            .at("/spec/scope")
             .and_then(Value::as_str)
             .unwrap_or("Namespaced");
         if plural.is_empty() {
