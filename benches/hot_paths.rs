@@ -13,6 +13,7 @@
 //! - `log_wrap`    -> 2.3 / 4.2 (full-buffer re-measure per frame)
 //! - `cell_extract` / `provider_selection` -> Tier 2/3 follow-up baselines
 
+use sofka::json::Pointer as _;
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -39,6 +40,20 @@ fn rows_cache(c: &mut Criterion) {
             });
         });
     }
+    // Faults filter on: the selection follows its pod through the batch.
+    let n = 2_000;
+    let (mut app, _rx) = bs::pods_app(n);
+    app.faults_only = true;
+    app.table_state.select(Some(3));
+    black_box(app.row_count());
+    g.bench_function(BenchmarkId::new("faults_batch_100", n), |b| {
+        let mut i = 0usize;
+        b.iter(|| {
+            bs::touch_batch(&mut app, i, 100, n);
+            i += 100;
+            black_box(app.row_count())
+        });
+    });
     g.finish();
 }
 
@@ -144,6 +159,7 @@ fn metadata(c: &mut Criterion) {
         b.iter(|| {
             for pod in &pods {
                 let meta = serde_json::to_value(&pod.metadata).unwrap();
+                #[allow(clippy::disallowed_methods)] // the baseline being measured
                 black_box(meta.pointer(rest).cloned());
             }
         });
@@ -229,6 +245,17 @@ fn log_viewport(c: &mut Criterion) {
             b.iter(|| {
                 logs.view.lines.extend(batch.iter().cloned());
                 black_box(logs.refresh_index(wrap_width).total_rows())
+            });
+        });
+
+        // Full follow buffer: each batch of 50 trims 50 lines from the front.
+        let (mut app, _rx) = bs::full_logs_app(5_000);
+        app.logs.set_filter("reconcile".into());
+        app.logs.refresh_index(wrap_width);
+        g.bench_function(BenchmarkId::new("trimming", label), |b| {
+            b.iter(|| {
+                bs::feed_logs(&mut app, batch.clone());
+                black_box(app.logs.refresh_index(wrap_width).total_rows())
             });
         });
     }
@@ -321,7 +348,7 @@ fn helm_decode(c: &mut Criterion) {
     {
         let wire = secret
             .data
-            .pointer("/data/release")
+            .at("/data/release")
             .and_then(serde_json::Value::as_str)
             .expect("fixture payload")
             .to_string();

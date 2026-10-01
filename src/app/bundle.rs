@@ -1,4 +1,5 @@
 use super::*;
+use crate::json::Pointer as _;
 
 use super::explain::{filter_events, list_selected};
 use crate::bundle::{Doc, redact_to_yaml};
@@ -320,7 +321,7 @@ fn render_findings(findings: &[crate::explain::Finding]) -> Vec<String> {
 /// The name of a pod's first (non-init) container, for a default log target.
 fn first_container(pod: &DynamicObject) -> Option<String> {
     pod.data
-        .pointer("/spec/containers/0/name")
+        .at("/spec/containers/0/name")
         .and_then(Value::as_str)
         .map(String::from)
 }

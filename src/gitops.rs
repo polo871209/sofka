@@ -11,6 +11,7 @@
 //! ranked [`Finding`]s with jump targets. The app layer does the fetching and
 //! renders/navigates the findings.
 
+use crate::json::Pointer as _;
 use kube::core::DynamicObject;
 use serde_json::Value;
 
@@ -103,10 +104,10 @@ pub fn source_ref(owner: &DynamicObject) -> Option<FluxRef> {
                 .unwrap_or_else(|| owner_ns.clone()),
         })
     };
-    d.pointer("/spec/sourceRef")
+    d.at("/spec/sourceRef")
         .and_then(from)
-        .or_else(|| d.pointer("/spec/chartRef").and_then(from))
-        .or_else(|| d.pointer("/spec/chart/spec/sourceRef").and_then(from))
+        .or_else(|| d.at("/spec/chartRef").and_then(from))
+        .or_else(|| d.at("/spec/chart/spec/sourceRef").and_then(from))
 }
 
 /// The `dependsOn` Kustomizations gating `owner` (namespace defaults to the
@@ -115,7 +116,7 @@ pub fn depends_on(owner: &DynamicObject) -> Vec<FluxRef> {
     let owner_ns = owner.metadata.namespace.clone().unwrap_or_default();
     owner
         .data
-        .pointer("/spec/dependsOn")
+        .at("/spec/dependsOn")
         .and_then(Value::as_array)
         .map(|deps| {
             deps.iter()
@@ -141,7 +142,7 @@ pub fn inventory_findings(
     kinds: &std::collections::HashMap<(String, String), (String, bool)>,
 ) -> Vec<Finding> {
     let mut out = vec![finding(0, Level::Heading, "Managed resources")];
-    let Some(entries) = owner.data.pointer("/status/inventory/entries") else {
+    let Some(entries) = owner.data.at("/status/inventory/entries") else {
         out.push(finding(1, Level::Info, "no inventory reported"));
         return out;
     };
@@ -151,7 +152,7 @@ pub fn inventory_findings(
     };
     let remote = owner
         .data
-        .pointer("/spec/kubeConfig")
+        .at("/spec/kubeConfig")
         .is_some_and(|v| !v.is_null());
     if remote {
         out.push(finding(
@@ -234,7 +235,7 @@ pub fn inventory_findings(
 pub fn ready(obj: &DynamicObject) -> Option<(String, String, String)> {
     let cond = obj
         .data
-        .pointer("/status/conditions")
+        .at("/status/conditions")
         .and_then(Value::as_array)?
         .iter()
         .find(|c| c.get("type").and_then(Value::as_str) == Some("Ready"))?;
@@ -248,14 +249,11 @@ pub fn ready(obj: &DynamicObject) -> Option<(String, String, String)> {
 }
 
 fn suspended(obj: &DynamicObject) -> bool {
-    obj.data.pointer("/spec/suspend").and_then(Value::as_bool) == Some(true)
+    obj.data.at("/spec/suspend").and_then(Value::as_bool) == Some(true)
 }
 
 fn str_at(obj: &DynamicObject, p: &str) -> Option<String> {
-    obj.data
-        .pointer(p)
-        .and_then(Value::as_str)
-        .map(String::from)
+    obj.data.at(p).and_then(Value::as_str).map(String::from)
 }
 
 fn applied_revision(obj: &DynamicObject) -> Option<String> {

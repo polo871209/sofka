@@ -28,6 +28,7 @@ pub mod fuzzy;
 pub mod gitops;
 pub mod helm;
 pub mod journal;
+pub mod json;
 pub mod k8s;
 pub mod keymap;
 pub mod keys;

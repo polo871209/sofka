@@ -7,6 +7,7 @@
 //! patch that would apply it — but never mutates anything itself. All of the
 //! logic here is pure and unit-tested; the HTTP queries live in the provider.
 
+use crate::json::Pointer as _;
 use serde_json::{Value, json};
 
 /// Parse a Prometheus/VictoriaMetrics instant-query response body and return
@@ -17,7 +18,7 @@ pub fn scalar_from_query(body: &str) -> Option<f64> {
     if v.get("status").and_then(Value::as_str) != Some("success") {
         return None;
     }
-    let result = v.pointer("/data/result")?.as_array()?;
+    let result = v.at("/data/result")?.as_array()?;
     let value = result.first()?.get("value")?.as_array()?.get(1)?.as_str()?;
     value.parse::<f64>().ok()
 }

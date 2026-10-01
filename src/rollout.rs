@@ -6,6 +6,7 @@
 //! pod template. Undo writes the chosen revision's pod template back to the
 //! workload, as `kubectl rollout undo --to-revision` does.
 
+use crate::json::Pointer as _;
 use kube::core::DynamicObject;
 use serde_json::{Map, Value, json};
 
@@ -64,7 +65,7 @@ pub fn template(obj: &DynamicObject) -> Option<Value> {
     } else {
         "/spec/template"
     };
-    let mut template = obj.data.pointer(pointer)?.as_object()?.clone();
+    let mut template = obj.data.at(pointer)?.as_object()?.clone();
     template.remove("$patch");
     if let Some(meta) = template.get_mut("metadata").and_then(Value::as_object_mut) {
         if meta.get("creationTimestamp").is_some_and(Value::is_null) {
@@ -79,7 +80,7 @@ pub fn template(obj: &DynamicObject) -> Option<Value> {
 
 /// The pod template of a live workload, cleaned like [`template`].
 pub fn workload_template(workload: &Value) -> Option<Value> {
-    let mut template = workload.pointer("/spec/template")?.as_object()?.clone();
+    let mut template = workload.at("/spec/template")?.as_object()?.clone();
     if let Some(meta) = template.get_mut("metadata").and_then(Value::as_object_mut)
         && meta.get("creationTimestamp").is_some_and(Value::is_null)
     {
@@ -92,7 +93,7 @@ pub fn workload_template(workload: &Value) -> Option<Value> {
 pub fn images(obj: &DynamicObject) -> String {
     template(obj)
         .as_ref()
-        .and_then(|t| t.pointer("/spec/containers"))
+        .and_then(|t| t.at("/spec/containers"))
         .and_then(Value::as_array)
         .map(|containers| {
             containers

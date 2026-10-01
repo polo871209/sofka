@@ -1,4 +1,5 @@
 use super::*;
+use crate::json::Pointer as _;
 use crate::store::row_key;
 use k8s_openapi::jiff::Timestamp;
 use serde_json::json;
@@ -18311,7 +18312,7 @@ async fn unchanged_row_order_reuses_shared_keys_on_content_updates() {
     assert!(!cache.cells.contains_key("default/a"));
     drop(cache);
     assert_eq!(
-        app.rows()[0].data.pointer("/status/phase"),
+        app.rows()[0].data.at("/status/phase"),
         Some(&json!("Running"))
     );
 }
@@ -18689,6 +18690,63 @@ async fn log_index_rebuilds_when_the_buffer_is_trimmed_or_cleared() {
     logs.view.clear_lines();
     assert_index_matches_naive(&mut logs, 12, "clear");
     assert_eq!(logs.index().total_rows(), 0);
+}
+
+/// The incremental index after trims and out-of-order inserts must equal a
+/// rebuild from scratch, markers included.
+fn assert_index_matches_rebuild(logs: &mut LogsView, wrap_width: usize, what: &str) {
+    let idx = logs.refresh_index(wrap_width);
+    let got = (idx.shown.clone(), idx.ends.clone(), idx.total_rows());
+    logs.reset_index();
+    let idx = logs.refresh_index(wrap_width);
+    let want = (idx.shown.clone(), idx.ends.clone(), idx.total_rows());
+    assert_eq!(got, want, "index diverged from a rebuild after {what}");
+}
+
+#[tokio::test]
+async fn log_index_stays_exact_across_trims_markers_and_late_lines() {
+    for (filter, wrap) in [("", 0usize), ("keep", 0), ("keep", 12)] {
+        let (mut app, _rx) = test_app();
+        app.mode = Mode::Logs;
+        app.logs_cfg.buffer = 25;
+        app.logs.set_filter(filter.into());
+        let mut second = 0u32;
+        for batch in 0..12 {
+            let lines = (0..7)
+                .map(|i| {
+                    second += 1;
+                    let word = if i % 3 == 0 { "drop" } else { "keep" };
+                    format!(
+                        "[a] 2026-09-10T10:{:02}:{:02}Z {word} batch {batch} line {i}",
+                        second / 60,
+                        second % 60
+                    )
+                })
+                .collect();
+            shortcut_log_lines(&mut app, lines);
+            assert_index_matches_rebuild(&mut app.logs, wrap, "a trimmed batch");
+            if batch % 3 == 0 {
+                app.handle_key(press(KeyCode::Char('m'))).unwrap();
+                assert_index_matches_rebuild(&mut app.logs, wrap, "a marker");
+            }
+            // A late line from another container sorts into the middle.
+            let late = second.saturating_sub(4);
+            shortcut_log_lines(
+                &mut app,
+                vec![format!(
+                    "[b] 2026-09-10T10:{:02}:{:02}Z keep late {batch}",
+                    late / 60,
+                    late % 60
+                )],
+            );
+            assert_index_matches_rebuild(&mut app.logs, wrap, "a late line");
+        }
+        assert_eq!(app.logs.view.lines.len(), 25);
+        assert!(
+            app.logs.index().shown.contains(&None),
+            "markers survive trims"
+        );
+    }
 }
 
 #[tokio::test]
@@ -19869,6 +19927,41 @@ async fn configured_ctrl_z_actions_take_precedence_over_faults() {
 }
 
 #[tokio::test]
+async fn faults_selection_survives_a_batch_of_watch_changes() {
+    let (mut app, _rx) = test_app();
+    app.switch_kind("pods");
+    for name in ["b", "c", "d"] {
+        let mut pod = faults_test_pod(name);
+        pod["metadata"]["uid"] = json!(name);
+        pod["status"]["phase"] = json!("Pending");
+        apply(&mut app, pod);
+    }
+    app.handle_key(ctrl(KeyCode::Char('z'))).unwrap();
+    app.handle_key(press(KeyCode::Down)).unwrap();
+    let applied = |v: Value| {
+        let o = obj(v);
+        Msg::Applied {
+            generation: app.generation,
+            key: row_key(&o),
+            obj: Box::new(o),
+        }
+    };
+    let mut earlier = faults_test_pod("a");
+    earlier["status"]["phase"] = json!("Pending");
+    let mut recovered = faults_test_pod("b");
+    recovered["metadata"]["uid"] = json!("b");
+    recovered["metadata"]["resourceVersion"] = json!("2");
+    let batch = vec![applied(earlier), applied(recovered)];
+
+    app.handle_msgs(batch);
+    assert_eq!(app.table_state.selected(), Some(1));
+    assert_eq!(
+        app.selected_ref().unwrap().metadata.name.as_deref(),
+        Some("c")
+    );
+}
+
+#[tokio::test]
 async fn faults_watch_changes_preserve_pod_identity_or_clear_selection() {
     let (mut app, _rx) = test_app();
     app.switch_kind("pods");
@@ -20238,14 +20331,14 @@ async fn pvc_helper_rechecks_access_after_confirmation_and_cleans_up() {
                 .2
                 .clone();
             assert_eq!(
-                created.pointer("/spec/containers/0/volumeMounts/0/subPath"),
+                created.at("/spec/containers/0/volumeMounts/0/subPath"),
                 Some(&json!("tenant"))
             );
             assert_eq!(
-                created.pointer("/spec/containers/0/volumeMounts/0/readOnly"),
+                created.at("/spec/containers/0/volumeMounts/0/readOnly"),
                 Some(&json!(true))
             );
-            assert!(created.pointer("/spec/affinity/nodeAffinity").is_some());
+            assert!(created.at("/spec/affinity/nodeAffinity").is_some());
             let mount = app.pvc.mount.as_ref().unwrap();
             assert!(mount.helper && mount.read_only);
             app.handle_key(press(KeyCode::Esc)).unwrap();

@@ -1,3 +1,4 @@
+use crate::json::Pointer as _;
 use kube::core::DynamicObject;
 use serde_json::Value;
 
@@ -149,13 +150,13 @@ fn pod_resource(obj: &DynamicObject, cpu: bool, limit: bool) -> Option<i64> {
         parse_mem_bytes
     };
     let read = |resources: &Value| resources.get(section)?.get(resource)?.as_str().map(parse);
-    if let Some(value) = obj.data.pointer("/spec/resources").and_then(read) {
+    if let Some(value) = obj.data.at("/spec/resources").and_then(read) {
         return Some(value);
     }
-    let containers = obj.data.pointer("/spec/containers")?.as_array()?;
+    let containers = obj.data.at("/spec/containers")?.as_array()?;
     let sidecars = obj
         .data
-        .pointer("/spec/initContainers")
+        .at("/spec/initContainers")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()

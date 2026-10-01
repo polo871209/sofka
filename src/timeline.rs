@@ -11,6 +11,7 @@
 //! keeps nothing on disk. The transition logic is pure and unit-tested; the app
 //! layer feeds it watch events and renders the history.
 
+use crate::json::Pointer as _;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use k8s_openapi::jiff::Timestamp;
@@ -321,14 +322,14 @@ fn cond_transition(prev: &DynamicObject, new: &DynamicObject, ty: &str) -> Optio
 
 fn str_at(obj: &DynamicObject, ptr: &str) -> String {
     obj.data
-        .pointer(ptr)
+        .at(ptr)
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string()
 }
 
 fn i_at(obj: &DynamicObject, ptr: &str) -> i64 {
-    obj.data.pointer(ptr).and_then(Value::as_i64).unwrap_or(0)
+    obj.data.at(ptr).and_then(Value::as_i64).unwrap_or(0)
 }
 
 fn restarts_sum(obj: &DynamicObject) -> i64 {
@@ -336,7 +337,7 @@ fn restarts_sum(obj: &DynamicObject) -> i64 {
     // the baseline or hide a restart in the same update that completes init.
     ["/status/containerStatuses", "/status/initContainerStatuses"]
         .into_iter()
-        .filter_map(|path| obj.data.pointer(path).and_then(Value::as_array))
+        .filter_map(|path| obj.data.at(path).and_then(Value::as_array))
         .flatten()
         .filter_map(|c| c.get("restartCount").and_then(Value::as_i64))
         .sum()
@@ -345,10 +346,10 @@ fn restarts_sum(obj: &DynamicObject) -> i64 {
 fn waiting_reason(obj: &DynamicObject) -> Option<String> {
     let cs = obj
         .data
-        .pointer("/status/containerStatuses")
+        .at("/status/containerStatuses")
         .and_then(Value::as_array)?;
     cs.iter().find_map(|c| {
-        c.pointer("/state/waiting/reason")
+        c.at("/state/waiting/reason")
             .and_then(Value::as_str)
             .filter(|r| *r != "ContainerCreating" && *r != "PodInitializing")
             .map(String::from)
@@ -358,7 +359,7 @@ fn waiting_reason(obj: &DynamicObject) -> Option<String> {
 /// `(status, reason)` of condition `ty`, if present.
 fn condition(obj: &DynamicObject, ty: &str) -> Option<(String, String)> {
     obj.data
-        .pointer("/status/conditions")
+        .at("/status/conditions")
         .and_then(Value::as_array)?
         .iter()
         .find(|c| c.get("type").and_then(Value::as_str) == Some(ty))

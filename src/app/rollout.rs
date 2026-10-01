@@ -1,4 +1,5 @@
 use super::*;
+use crate::json::Pointer as _;
 
 impl App {
     /// `ctrl-u` on a workload: list the revisions it keeps, newest first.
@@ -231,7 +232,7 @@ async fn rollout_undo(api: &Api<DynamicObject>, name: &str, patch: &Value) -> Re
     let live = api.get(name).await?;
     // kubectl refuses too: a paused Deployment takes the template but does
     // not roll it out, so the undo would look applied and not be.
-    if live.data.pointer("/spec/paused") == Some(&Value::Bool(true)) {
+    if live.data.at("/spec/paused") == Some(&Value::Bool(true)) {
         anyhow::bail!("the deployment is paused; resume it first");
     }
     let mut target = patch["spec"]["template"].clone();

@@ -13,6 +13,7 @@
 //! evidence and renders the findings; [`Finding::target`] lets the view jump
 //! straight to the resource behind a line.
 
+use crate::json::Pointer as _;
 use kube::core::DynamicObject;
 use serde_json::Value;
 
@@ -492,7 +493,7 @@ fn pod_problems(pod: &DynamicObject) -> Vec<(Level, String)> {
 
 /// `(reason, exitCode)` of a container's last termination, if any.
 fn last_termination(cs: &Value) -> Option<(String, i64)> {
-    let term = cs.pointer("/lastState/terminated")?;
+    let term = cs.at("/lastState/terminated")?;
     let reason = term
         .get("reason")
         .and_then(Value::as_str)
@@ -506,7 +507,7 @@ fn last_termination(cs: &Value) -> Option<(String, i64)> {
 
 fn container_statuses(pod: &DynamicObject) -> Vec<&Value> {
     pod.data
-        .pointer("/status/containerStatuses")
+        .at("/status/containerStatuses")
         .and_then(Value::as_array)
         .map(|a| a.iter().collect())
         .unwrap_or_default()
@@ -514,7 +515,7 @@ fn container_statuses(pod: &DynamicObject) -> Vec<&Value> {
 
 fn conditions(obj: &DynamicObject) -> Vec<&Value> {
     obj.data
-        .pointer("/status/conditions")
+        .at("/status/conditions")
         .and_then(Value::as_array)
         .map(|a| a.iter().collect())
         .unwrap_or_default()
@@ -531,11 +532,11 @@ fn cstr<'a>(cond: &'a Value, key: &str) -> &'a str {
 }
 
 fn ptr_str<'a>(v: &'a Value, p: &str) -> Option<&'a str> {
-    v.pointer(p).and_then(Value::as_str)
+    v.at(p).and_then(Value::as_str)
 }
 
 fn ptr_i64(v: &Value, p: &str) -> Option<i64> {
-    v.pointer(p).and_then(Value::as_i64)
+    v.at(p).and_then(Value::as_i64)
 }
 
 /// Join a condition's reason and message into `Reason: message`, dropping

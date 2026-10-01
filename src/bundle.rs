@@ -8,6 +8,7 @@
 //! credential-looking annotations never reach the file, and the manifest spells
 //! out exactly what was included and what was withheld.
 
+use crate::json::Pointer as _;
 use kube::core::DynamicObject;
 use serde_json::Value;
 
@@ -75,7 +76,7 @@ fn count_secret_env(v: &Value) -> usize {
             Value::Object(map) => {
                 if map.get("env").is_some_and(Value::is_array) {
                     for e in map["env"].as_array().unwrap() {
-                        if e.pointer("/valueFrom/secretKeyRef").is_some() {
+                        if e.at("/valueFrom/secretKeyRef").is_some() {
                             *n += 1;
                         }
                     }

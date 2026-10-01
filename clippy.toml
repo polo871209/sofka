@@ -1,0 +1,3 @@
+disallowed-methods = [
+  { path = "serde_json::Value::pointer", reason = "allocates two Strings per segment; use `crate::json::Pointer::at`" },
+]
