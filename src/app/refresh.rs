@@ -190,6 +190,7 @@ impl App {
 
     pub(super) fn clear_document_source(&mut self) {
         self.document_source = None;
+        self.rollout_diff = None;
         if let Some(task) = self.describe_task.take() {
             task.abort();
         }

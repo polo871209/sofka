@@ -148,6 +148,7 @@ impl App {
             ConfirmAction::HelmRollback { ns, name, revision } => {
                 self.do_helm_rollback(ns, name, revision);
             }
+            ConfirmAction::RolloutUndo(undo) => self.do_rollout_undo(undo),
             ConfirmAction::HelmUninstall { targets } => {
                 self.do_helm_uninstall(targets);
                 self.marked.clear();

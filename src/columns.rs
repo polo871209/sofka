@@ -52,6 +52,7 @@ struct CellContext<'a> {
     pod: OnceCell<(String, String, String)>,
     helm: OnceCell<Option<crate::helm::Summary>>,
     node_roles: Option<std::sync::Arc<crate::config::NodeRoles>>,
+    rollout_current: Option<i64>,
 }
 
 impl<'a> CellContext<'a> {
@@ -65,6 +66,7 @@ impl<'a> CellContext<'a> {
             pod: OnceCell::new(),
             helm: OnceCell::new(),
             node_roles: None,
+            rollout_current: None,
         }
     }
 
@@ -315,6 +317,18 @@ const HELM_COLUMNS: &[Column] = &[
     column("UPDATED", col_helm_updated),
 ];
 
+/// Every revision of one workload — like `kubectl rollout history`. Backed by
+/// ReplicaSets or ControllerRevisions (see `crate::rollout`).
+const ROLLOUT_HISTORY_COLUMNS: &[Column] = &[
+    column("REVISION", col_rollout_revision),
+    status_column("STATUS", col_rollout_status),
+    column("IMAGES", col_rollout_images),
+    column("CHANGE-CAUSE", col_rollout_change_cause),
+    column("CREATED", col_rollout_created),
+    column("AGE", col_age),
+    wide_column("NAME", col_name),
+];
+
 /// Every revision of one release — like `helm history <release>`.
 const HELM_HISTORY_COLUMNS: &[Column] = &[
     column("REVISION", col_helm_revision),
@@ -374,6 +388,7 @@ fn columns_for(group: &str, plural: &str) -> &'static [Column] {
         ("argoproj.io", "applicationsets") => ARGOCD_APPSET_COLUMNS,
         ("", "helm") => HELM_COLUMNS,
         ("", "helmhistory") => HELM_HISTORY_COLUMNS,
+        ("apps", "rollouthistory") => ROLLOUT_HISTORY_COLUMNS,
         _ => DEFAULT_COLUMNS,
     }
 }
@@ -425,6 +440,7 @@ pub struct ViewSpec {
     columns: Vec<SpecColumn>,
     status_idx: Option<usize>,
     node_roles: Option<std::sync::Arc<crate::config::NodeRoles>>,
+    rollout_current: Option<i64>,
 }
 
 struct SpecColumn {
@@ -572,22 +588,33 @@ pub fn build_spec(
         && group.is_empty()
         && matches!(plural, "pods" | "nodes")
     {
-        let mut defaults = Vec::new();
-        if plural == "nodes" {
-            defaults.push(("PODS", MetricColumn::NodePods));
-        }
-        defaults.extend([("CPU", MetricColumn::Cpu), ("MEM", MetricColumn::Memory)]);
-        if plural == "nodes" {
-            defaults.extend([
+        let defaults: &[(&str, MetricColumn)] = if plural == "nodes" {
+            &[
+                ("PODS", MetricColumn::NodePods),
+                ("CPU", MetricColumn::Cpu),
+                ("MEM", MetricColumn::Memory),
                 ("%CPU", MetricColumn::NodeCpuUtilization),
                 ("%MEM", MetricColumn::NodeMemoryUtilization),
-            ]);
-        }
-        for (header, metric) in defaults {
+            ]
+        } else {
+            &[
+                ("%CPU/R", MetricColumn::CpuRequestUtilization),
+                ("CPU", MetricColumn::Cpu),
+                ("%MEM/R", MetricColumn::MemoryRequestUtilization),
+                ("MEM", MetricColumn::Memory),
+            ]
+        };
+        // Pods show usage right after STATUS, so RESTARTS and AGE come last. Nodes append.
+        let mut at = (plural == "pods").then(|| {
+            cols.iter()
+                .position(|c| c.is_status)
+                .map_or(cols.len(), |i| i + 1)
+        });
+        for &(header, metric) in defaults {
             if cols.iter().any(|c| c.header == header || matches!(&c.source, SpecSource::User(uc) if uc.kind == crate::views::ColumnKind::Metric(metric))) {
                 continue;
             }
-            cols.push(spec_user(&crate::views::UserColumn {
+            let column = spec_user(&crate::views::UserColumn {
                 header: header.into(),
                 pointer: String::new(),
                 fallback_pointers: Vec::new(),
@@ -597,7 +624,14 @@ pub fn build_spec(
                 align: None,
                 condition_match: crate::views::ConditionMatch::Type,
                 condition_field: None,
-            }));
+            });
+            match at.as_mut() {
+                Some(i) => {
+                    cols.insert(*i, column);
+                    *i += 1;
+                }
+                None => cols.push(column),
+            }
         }
     }
     cols.retain(|c| wide || !c.wide);
@@ -608,6 +642,7 @@ pub fn build_spec(
         columns: cols,
         status_idx,
         node_roles: None,
+        rollout_current: None,
     }
 }
 
@@ -652,6 +687,7 @@ pub fn build_table_spec(
         columns: resolved,
         status_idx: None,
         node_roles: None,
+        rollout_current: None,
     }
 }
 
@@ -662,9 +698,19 @@ impl ViewSpec {
         }
     }
 
+    pub(crate) fn rollout_current(&self) -> Option<i64> {
+        self.rollout_current
+    }
+
+    /// The revision that the rollout history view marks as deployed.
+    pub(crate) fn set_rollout_current(&mut self, revision: Option<i64>) {
+        self.rollout_current = revision;
+    }
+
     fn cell_context<'a>(&self, obj: &'a DynamicObject, now: i64) -> CellContext<'a> {
         let mut ctx = CellContext::new(obj, now);
         ctx.node_roles = self.node_roles.clone();
+        ctx.rollout_current = self.rollout_current;
         ctx
     }
 
@@ -691,6 +737,11 @@ impl ViewSpec {
             }
             _ => None,
         }
+    }
+
+    /// The header of the column whose value tints the row.
+    pub fn status_header(&self) -> Option<&str> {
+        Some(&self.columns.get(self.status_idx?)?.header)
     }
 
     pub fn canonical_header(&self, idx: usize) -> Option<&str> {
@@ -1126,6 +1177,31 @@ impl WorkloadCounts {
     }
 }
 
+/// Whether a pod's Ready condition, or one of its readiness gates, is not yet True.
+pub fn pod_readiness_blocked(obj: &DynamicObject) -> bool {
+    let conditions = obj
+        .data
+        .pointer("/status/conditions")
+        .and_then(serde_json::Value::as_array);
+    let condition = |name: &str| {
+        conditions
+            .and_then(|conditions| conditions.iter().find(|c| c["type"].as_str() == Some(name)))
+    };
+    condition("Ready").is_some_and(|c| c["status"].as_str() != Some("True"))
+        || obj
+            .data
+            .pointer("/spec/readinessGates")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|gates| {
+                gates.iter().any(|gate| {
+                    gate["conditionType"]
+                        .as_str()
+                        .and_then(condition)
+                        .is_none_or(|c| c["status"].as_str() != Some("True"))
+                })
+            })
+}
+
 /// Rollout-health summary for workload kinds, derived from the object's own
 /// replica counts and conditions — the same evidence `X`/explain weighs, so
 /// a red row here and an `X` verdict never disagree. The strings feed the
@@ -1544,6 +1620,38 @@ fn col_argocd_appset_apps<'a>(ctx: &CellContext<'a>) -> Cow<'a, str> {
 
 fn col_helm_name<'a>(ctx: &CellContext<'a>) -> Cow<'a, str> {
     Cow::Borrowed(crate::helm::release_name(ctx.obj).unwrap_or(ctx.name))
+}
+
+fn col_rollout_revision<'a>(ctx: &CellContext<'a>) -> Cow<'a, str> {
+    Cow::Owned(
+        crate::rollout::revision(ctx.obj)
+            .map(|r| r.to_string())
+            .unwrap_or_default(),
+    )
+}
+
+/// Helm's words, so both history views read the same.
+fn col_rollout_status<'a>(ctx: &CellContext<'a>) -> Cow<'a, str> {
+    let Some(current) = ctx.rollout_current else {
+        return Cow::Borrowed("");
+    };
+    Cow::Borrowed(if crate::rollout::revision(ctx.obj) == Some(current) {
+        "deployed"
+    } else {
+        "superseded"
+    })
+}
+
+fn col_rollout_images<'a>(ctx: &CellContext<'a>) -> Cow<'a, str> {
+    Cow::Owned(crate::rollout::images(ctx.obj))
+}
+
+fn col_rollout_change_cause<'a>(ctx: &CellContext<'a>) -> Cow<'a, str> {
+    Cow::Borrowed(crate::rollout::change_cause(ctx.obj).unwrap_or_default())
+}
+
+fn col_rollout_created<'a>(ctx: &CellContext<'a>) -> Cow<'a, str> {
+    Cow::Owned(crate::rollout::created(ctx.obj))
 }
 
 fn col_helm_revision<'a>(ctx: &CellContext<'a>) -> Cow<'a, str> {
@@ -3573,7 +3681,8 @@ mod tests {
         assert_eq!(
             spec.headers(),
             vec![
-                "NAME", "READY", "STATUS", "RESTARTS", "NODE-IP", "AGE", "CPU", "MEM"
+                "NAME", "READY", "STATUS", "%CPU/R", "CPU", "%MEM/R", "MEM", "RESTARTS", "NODE-IP",
+                "AGE"
             ]
         );
         let o = obj(json!({
@@ -3583,7 +3692,7 @@ mod tests {
         }));
         let (cells, status_idx) = spec.cells(&o, now_secs());
         assert_eq!(cells[2], "Running");
-        assert_eq!(cells[4], "10.0.0.9");
+        assert_eq!(cells[8], "10.0.0.9");
         assert_eq!(status_idx, Some(2));
     }
 
@@ -3598,7 +3707,10 @@ mod tests {
             true,
         );
         let spec = build_spec("", "pods", Some(&v), None, true);
-        assert_eq!(spec.headers(), vec!["NAME", "PHASE", "CPU", "MEM"]);
+        assert_eq!(
+            spec.headers(),
+            vec!["NAME", "PHASE", "%CPU/R", "CPU", "%MEM/R", "MEM"]
+        );
     }
 
     #[test]
@@ -3606,13 +3718,16 @@ mod tests {
         let narrow = build_spec("", "pods", None, None, false);
         assert_eq!(
             narrow.headers(),
-            vec!["NAME", "READY", "STATUS", "RESTARTS", "AGE", "CPU", "MEM"]
+            vec![
+                "NAME", "READY", "STATUS", "%CPU/R", "CPU", "%MEM/R", "MEM", "RESTARTS", "AGE"
+            ]
         );
         let wide = build_spec("", "pods", None, None, true);
         assert_eq!(
             wide.headers(),
             vec![
-                "NAME", "READY", "STATUS", "RESTARTS", "IP", "NODE", "AGE", "CPU", "MEM"
+                "NAME", "READY", "STATUS", "%CPU/R", "CPU", "%MEM/R", "MEM", "RESTARTS", "IP",
+                "NODE", "AGE"
             ]
         );
     }
@@ -3631,7 +3746,9 @@ mod tests {
         let spec = build_spec("", "pods", None, Some(&crd), false);
         assert_eq!(
             spec.headers(),
-            vec!["NAME", "READY", "STATUS", "RESTARTS", "AGE", "CPU", "MEM"]
+            vec![
+                "NAME", "READY", "STATUS", "%CPU/R", "CPU", "%MEM/R", "MEM", "RESTARTS", "AGE"
+            ]
         );
         // Explicit user view outranks printer columns.
         let user = view(
@@ -3694,7 +3811,7 @@ mod tests {
             Some(Cow::Borrowed("pod-a"))
         ));
         assert!(matches!(
-            spec.cell_at(&pod, 4, now_secs()),
+            spec.cell_at(&pod, 8, now_secs()),
             Some(Cow::Borrowed("10.0.0.7"))
         ));
         assert!(matches!(

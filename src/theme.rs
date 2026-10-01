@@ -520,21 +520,63 @@ pub fn status_color(s: &str) -> Color {
     match s.strip_suffix(",SchedulingDisabled").unwrap_or(s) {
         s if failure_status(s) => red(),
         s if s.starts_with("Init:") => yellow(),
-        "Running" | "Ready" | "Active" | "Bound" | "True" | "deployed" | "Synced" | "Healthy" => {
-            green()
-        }
+        s if healthy_status(s) => green(),
         // Faded, not "healthy green" — a finished pod isn't running, and a
         // scaled-to-zero workload isn't serving.
-        "Succeeded" | "Completed" | "superseded" | "uninstalled" | "ScaledDown" => overlay0(),
-        "Pending" | "Suspended" | "Completing" | "ContainerCreating" | "PodInitializing"
-        | "SchedulingGated" | "Progressing" | "pending-install" | "pending-upgrade"
-        | "pending-rollback" | "OutOfSync" => yellow(),
+        s if done_status(s) => overlay0(),
+        s if pending_status(s) || s == "OutOfSync" => yellow(),
         // Matches row_color's killColor — a distinct "on its way out" hue,
         // not the same bucket as Pending.
         "Terminating" | "uninstalling" => mauve(),
         "Unknown" | "" | "unknown" => overlay1(),
         _ => text(),
     }
+}
+
+/// Sort rank of a status: failures first, then work in progress, and finished
+/// work last. Uses the same groups as [`status_color`].
+pub fn status_rank(s: &str) -> u8 {
+    if s == "Ready,SchedulingDisabled" {
+        return 1;
+    }
+    match s.strip_suffix(",SchedulingDisabled").unwrap_or(s) {
+        s if failure_status(s) => 0,
+        s if s.starts_with("Init:") || pending_status(s) || s == "OutOfSync" => 1,
+        "Terminating" | "uninstalling" => 2,
+        s if healthy_status(s) => 4,
+        s if done_status(s) => 5,
+        _ => 3,
+    }
+}
+
+fn healthy_status(s: &str) -> bool {
+    matches!(
+        s,
+        "Running" | "Ready" | "Active" | "Bound" | "True" | "deployed" | "Synced" | "Healthy"
+    )
+}
+
+fn pending_status(s: &str) -> bool {
+    matches!(
+        s,
+        "Pending"
+            | "Suspended"
+            | "Completing"
+            | "ContainerCreating"
+            | "PodInitializing"
+            | "SchedulingGated"
+            | "Progressing"
+            | "pending-install"
+            | "pending-upgrade"
+            | "pending-rollback"
+    )
+}
+
+fn done_status(s: &str) -> bool {
+    matches!(
+        s,
+        "Succeeded" | "Completed" | "superseded" | "uninstalled" | "ScaledDown"
+    )
 }
 
 fn failure_status(status: &str) -> bool {
@@ -587,11 +629,8 @@ fn failure_status(status: &str) -> bool {
 pub fn row_color(s: &str) -> Color {
     match s.strip_suffix(",SchedulingDisabled").unwrap_or(s) {
         s if failure_status(s) => red(),
-        s if s.starts_with("Init:") => peach(),
-        "Pending" | "Suspended" | "Completing" | "ContainerCreating" | "PodInitializing"
-        | "SchedulingGated" | "Progressing" | "pending-install" | "pending-upgrade"
-        | "pending-rollback" => peach(),
-        "Completed" | "Succeeded" | "superseded" | "uninstalled" | "ScaledDown" => overlay0(),
+        s if s.starts_with("Init:") || pending_status(s) => peach(),
+        s if done_status(s) => overlay0(),
         // k9s killColor — terminating/deleting rows.
         "Terminating" | "uninstalling" => mauve(),
         _ => blue(),
@@ -611,6 +650,23 @@ pub fn severity_fg(sev: crate::thresholds::Severity) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_rank_puts_failures_first_and_finished_work_last() {
+        let ordered = [
+            "CrashLoopBackOff",
+            "Pending",
+            "Terminating",
+            "Unknown",
+            "Running",
+            "Completed",
+        ];
+        let ranks: Vec<u8> = ordered.iter().map(|s| status_rank(s)).collect();
+        assert!(ranks.is_sorted_by(|a, b| a < b), "{ranks:?}");
+        assert_eq!(status_rank("NotReady,SchedulingDisabled"), 0);
+        assert_eq!(status_rank("Ready,SchedulingDisabled"), 1);
+        assert_eq!(status_rank("Init:0/1"), status_rank("Pending"));
+    }
 
     #[test]
     fn all_builtins_parse() {

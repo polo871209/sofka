@@ -223,8 +223,8 @@ prefer_context_namespace = false # true gives the kubeconfig namespace priority 
 default_resource  = "deployments"
 readonly          = false  # true disables every mutating action (delete, edit,
                            # scale, shell, plugins, …); --readonly/--write win
-hide_header = false # true hides the header and logo
-compact_mode = false # true starts with a one-line header and no footer
+hide_header = false # true hides the header
+compact_mode = false # true starts with a one-line header
 detail_wrap = false # true starts with document line wrapping enabled
 mouse             = false  # default; :mouse switches it for this session
                            # false keeps the terminal's native mouse behavior
@@ -250,13 +250,13 @@ on a fatal main-thread panic. It does not restore the title from before startup.
 Set `terminal_title = false` to keep your shell or terminal in control of the
 title. Headless modes do not change the title.
 
-Set `hide_header = true` to remove the header and logo and give more space to
+Set `hide_header = true` to remove the header and give more space to
 the active view. The default is `false`. This option supports cluster and
 context overrides and `:reload`. It also hides the one-line header in compact
-mode (`Ctrl-E`). The footer and command input keep their existing behavior.
+mode (`Ctrl-E`). The command input keeps its existing behavior.
 
 Set `compact_mode = true` to start with a one-line header containing resource,
-namespace, context, and live status, with the footer hidden. The default is
+namespace, context, and the flash message. The default is
 `false`. `Ctrl-E` toggles compact mode during the session. Cluster and context
 overrides are resolved at startup; `:reload` and subsequent context switches do
 not reset the current compact mode. With `hide_header = true`, the compact
@@ -279,7 +279,7 @@ their scroll speed. The option supports cluster and context overrides and
 `:reload`.
 
 `remember_sort` is enabled by default. Set it to `false` to stop saving and
-restoring sort choices from `S`, `A`, `I`, and column header clicks. Existing saved
+restoring sort choices from `S`, `I`, and column header clicks. Existing saved
 choices stay on disk and become available again when you enable the option.
 The option supports cluster and context overrides and `:reload`. A reload
 keeps the active sort; the option controls later sort changes and view starts.
@@ -294,7 +294,8 @@ sort = "AGE:desc"
 ```
 
 A resource-specific sort has priority over this default. Tables without the
-specified column ignore the global sort. See [Views](views.md) for details.
+specified column ignore the global sort. With no configured sort, tables sort
+by STATUS with failures first. See [Views](views.md) for details.
 
 CRD short names are discovered automatically. To override a short name, add it
 under `[aliases]`. Use a group-qualified target when resource names overlap:
@@ -319,11 +320,10 @@ favorite_namespace_1 = "f1"
 favorite_namespace_2 = []
 ```
 
-The age sort, selected namespace, and log marker actions can also be changed:
+The selected namespace and log marker actions can also be changed:
 
 ```toml
 [keys.table]
-sort_age = "A"
 namespace_selected = "W"
 
 [keys.logs]
@@ -352,6 +352,8 @@ red = "#fb4934"
 Every semantic color - row status, severity badges, headers, borders - is derived
 from the active palette, so one skin change lands everywhere at once. `:skin`
 switches live, `:skin gruvbox-dark` applies directly.
+
+YAML views use the swatches that catppuccin/nvim uses for YAML: `lavender` keys, `green` strings, `peach` numbers, booleans, and null, `yellow` anchors and tags, `pink` document markers, and `overlay1` punctuation and comments. To change one, override that swatch under `[skin.colors]`.
 
 Custom columns accept a single `path` string or an ordered list of fallback
 paths. sofka uses the first value that exists and is not `null`. See

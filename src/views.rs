@@ -195,6 +195,7 @@ pub const BUILTIN_DRILLS: &[&str] = &[
     "customresourcedefinitions",
     "helm",
     "helmhistory",
+    "rollouthistory",
     "helmreleases",
 ];
 

@@ -196,6 +196,7 @@ impl App {
         match self.kind_plural.as_str() {
             "helm" => Some("helm"),
             "helmhistory" => Some("helm history"),
+            "rollouthistory" => Some("rollout history"),
             _ => None,
         }
     }
@@ -1126,7 +1127,13 @@ impl App {
                 let prev = self.store.latest(&key);
                 self.timeline
                     .observe(&self.kind_plural, &key, prev.map(Arc::as_ref), &obj);
+                // `:diff` reads the annotation first, so a copy kept for an
+                // annotated object is never read and only pins memory.
+                let has_last_applied = obj.metadata.annotations.as_ref().is_some_and(|a| {
+                    a.contains_key("kubectl.kubernetes.io/last-applied-configuration")
+                });
                 if let Some(prev) = prev
+                    && !has_last_applied
                     && prev.metadata.resource_version != obj.metadata.resource_version
                 {
                     // An `Arc` bump, not a deep copy of the object's whole
@@ -1140,6 +1147,7 @@ impl App {
                     StoreMutation::Buffered | StoreMutation::Removed | StoreMutation::Unchanged => {
                     }
                 }
+                self.sync_rollout_current();
             }
             Msg::Deleted { generation, key } if generation == self.generation => {
                 self.timeline.observe_delete(&self.kind_plural, &key);
@@ -1149,11 +1157,13 @@ impl App {
                 if self.store.remove(&key) == StoreMutation::Removed {
                     self.invalidate_row(&key);
                 }
+                self.sync_rollout_current();
             }
             Msg::Synced { generation } if generation == self.generation => {
                 if self.store.finish_sync() {
                     self.clear_rows_cache();
                 }
+                self.sync_rollout_current();
             }
             Msg::WatchError { generation, error } if generation == self.generation => {
                 self.show_watch_error(error);
@@ -1744,10 +1754,12 @@ impl App {
                     .is_some_and(|(id, _)| *id == claim) =>
             {
                 self.describe_task = None;
-                if warn.is_some()
-                    && let Some(source) = self.document_source.as_mut()
-                {
-                    source.view = refresh::RefreshView::Yaml;
+                // A failed describe falls back to YAML, now or on the next refresh.
+                if warn.is_some() {
+                    self.detail.syntax = Syntax::Yaml;
+                    if let Some(source) = self.document_source.as_mut() {
+                        source.view = refresh::RefreshView::Yaml;
+                    }
                 }
                 self.detail.title = title;
                 self.detail.replace_lines(lines.into());

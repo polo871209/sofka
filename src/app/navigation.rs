@@ -1,7 +1,7 @@
 use super::*;
 
 impl App {
-    fn retain_filter_selectors(&mut self) {
+    pub(super) fn retain_filter_selectors(&mut self) {
         let parsed = self.parsed_filter();
         let mut selectors = Vec::new();
         if let Some(labels) = parsed.labels() {
@@ -61,6 +61,8 @@ impl App {
             // Helm: release -> every revision, revision -> its values.
             "helm" => self.drill_into_helm_history(&obj),
             "helmhistory" => self.open_helm_values(&obj),
+            // Rollout history: revision -> its diff against the deployed one.
+            "rollouthistory" => self.open_rollout_diff(&obj),
             // A Flux HelmRelease bridges into the same native inspector:
             // enter opens the history of the Helm release it manages.
             "helmreleases" => self.drill_into_helmrelease(&obj),
@@ -245,6 +247,7 @@ impl App {
         let yaml = serde_yaml::to_string(&rel.config).unwrap_or_else(|e| format!("# error: {e}"));
         self.detail = Scrollable {
             wrap: self.detail.wrap,
+            syntax: super::Syntax::Yaml,
             title: format!("{} v{} — values", rel.name, rel.revision),
             lines: yaml.lines().map(String::from).collect(),
             ..Default::default()

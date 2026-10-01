@@ -300,6 +300,16 @@ impl Cascade {
     }
 }
 
+/// A rollback that the rollout history view prepared for one workload.
+#[derive(Clone)]
+struct RolloutUndo {
+    kind: Kind,
+    ns: String,
+    name: String,
+    revision: i64,
+    patch: Value,
+}
+
 enum ConfirmAction {
     /// One or more `(name, ns)` targets to delete (bulk when marked).
     Delete {
@@ -347,6 +357,9 @@ enum ConfirmAction {
         name: String,
         revision: String,
     },
+    /// Write one revision's pod template back to its workload
+    /// (`kubectl rollout undo --to-revision`). Never bulk, like Helm rollback.
+    RolloutUndo(RolloutUndo),
     /// Uninstall one or more Helm releases (`helm uninstall`), `(name, ns)`
     /// per release — bulk when marked, like [`ConfirmAction::Delete`].
     HelmUninstall { targets: Vec<(String, String)> },
@@ -500,9 +513,19 @@ enum PromptKind {
     },
 }
 
+/// How a document view colors its lines.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Syntax {
+    /// `key: value` heuristics for describe output and other text.
+    #[default]
+    Generic,
+    Yaml,
+}
+
 #[derive(Default)]
 pub struct Scrollable {
     pub title: String,
+    pub syntax: Syntax,
     /// Mask sensitive header and status values while this document is visible.
     pub redact_header: bool,
     pub lines: VecDeque<String>,
@@ -548,7 +571,6 @@ struct MatchCache {
 }
 
 struct DocumentViewport {
-    widest: usize,
     width: usize,
     height: usize,
     wrap: bool,
@@ -835,13 +857,11 @@ impl Scrollable {
                 || viewport.line_count != self.lines.len()
         });
         if stale {
-            let mut widest = 0usize;
             let mut rows = 0usize;
             let ends = self
                 .lines
                 .iter()
                 .map(|line| {
-                    widest = widest.max(line.as_str().width());
                     let line_rows = if self.wrap {
                         crate::ui::wrapped_height(line, width)
                     } else {
@@ -852,7 +872,6 @@ impl Scrollable {
                 })
                 .collect();
             self.viewport = Some(DocumentViewport {
-                widest,
                 width,
                 height,
                 wrap: self.wrap,
@@ -891,12 +910,6 @@ impl Scrollable {
             .saturating_add(1)
             .min(self.lines.len());
         (start, end, row_offset)
-    }
-
-    pub(crate) fn scroll_dimensions(&self) -> (usize, usize) {
-        self.viewport
-            .as_ref()
-            .map_or((self.lines.len(), 0), |v| (v.total_rows(), v.widest))
     }
 
     fn max_scroll(&self) -> usize {
@@ -1415,6 +1428,8 @@ impl LogsView {
 enum SortKey {
     Num(f64),
     Text(Rc<str>),
+    /// A status cell: [`crate::theme::status_rank`], then the text.
+    Status(u8, Rc<str>),
 }
 
 impl From<crate::views::SortValue> for SortKey {
@@ -1427,14 +1442,24 @@ impl From<crate::views::SortValue> for SortKey {
 }
 
 impl SortKey {
+    fn order(&self) -> u8 {
+        match self {
+            SortKey::Num(_) => 0,
+            SortKey::Text(_) => 1,
+            SortKey::Status(..) => 2,
+        }
+    }
+
     fn cmp_to(&self, other: &Self) -> std::cmp::Ordering {
         use std::cmp::Ordering;
         match (self, other) {
             (SortKey::Num(a), SortKey::Num(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
             (SortKey::Text(a), SortKey::Text(b)) => natural_cmp(a, b),
+            (SortKey::Status(ra, a), SortKey::Status(rb, b)) => {
+                ra.cmp(rb).then_with(|| natural_cmp(a, b))
+            }
             // Mixed kinds shouldn't occur within one column; keep it stable.
-            (SortKey::Num(_), SortKey::Text(_)) => Ordering::Less,
-            (SortKey::Text(_), SortKey::Num(_)) => Ordering::Greater,
+            (a, b) => a.order().cmp(&b.order()),
         }
     }
 }
@@ -1894,7 +1919,6 @@ pub struct App {
     pub command: String,
     pub cmd_suggestions: Vec<Suggestion>,
     pub cmd_sel: usize,
-    pub scrollbar_activity: Option<std::time::Instant>,
     pub flash: String,
     pub flash_err: bool,
     pub(super) watch_error_flash: Option<String>,
@@ -2166,6 +2190,8 @@ pub struct App {
     pub image_values: Vec<String>,
     /// (namespace, name, plural) of the object being re-imaged.
     image_target: Option<(String, String, String)>,
+    /// The rollback that `enter` confirms from the open rollout diff.
+    rollout_diff: Option<RolloutUndo>,
 
     /// Latest metrics snapshot: "ns/name" (pods) or "name" (nodes) -> (cpu_m, mem_bytes).
     pub metrics: HashMap<String, (i64, i64)>,
@@ -2320,8 +2346,8 @@ pub struct App {
     server_table_started: bool,
     /// Wide mode (`w`): show wide-only columns.
     pub wide: bool,
-    /// Compact mode (`ctrl-e`): collapse the header to one line and hide the
-    /// footer, so a tiled/multiplexed pane shows mostly table.
+    /// Compact mode (`ctrl-e`): collapse the header to one line, so a
+    /// tiled/multiplexed pane shows mostly table.
     pub compact: bool,
     /// Hide the header in normal and compact modes.
     pub hide_header: bool,
@@ -2401,7 +2427,6 @@ impl App {
             // Pre-seeded so the first tick sees no change and leaves the
             // welcome hint's sticky flag alone.
             flash_seen: WELCOME_FLASH.into(),
-            scrollbar_activity: None,
             flash_since: std::time::Instant::now(),
             flash_sticky: true,
             next_status_claim: 0,
@@ -2522,6 +2547,7 @@ impl App {
             readonly_override: None,
             image_values: Vec::new(),
             image_target: None,
+            rollout_diff: None,
             metrics: HashMap::new(),
             container_metrics: HashMap::new(),
             container_history: metrics_history::ContainerHistory::default(),
@@ -2702,6 +2728,7 @@ mod pvcexplore;
 pub mod rbac;
 mod refresh;
 mod rightsize;
+mod rollout;
 mod rows;
 mod snapshot;
 mod timeline;

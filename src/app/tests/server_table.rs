@@ -58,12 +58,14 @@ fn set_filter(app: &mut App, text: &str) {
     app.handle_key(press(KeyCode::Enter)).unwrap();
 }
 
-fn sort_by(app: &mut App, header: &str) {
+/// Sorts low to high: `S` picks high to low, then `I` inverts.
+fn sort_ascending(app: &mut App, header: &str) {
     app.handle_key(press(KeyCode::Char('S'))).unwrap();
     for ch in header.chars() {
         app.handle_key(press(KeyCode::Char(ch))).unwrap();
     }
     app.handle_key(press(KeyCode::Enter)).unwrap();
+    app.handle_key(press(KeyCode::Char('I'))).unwrap();
 }
 
 #[tokio::test]
@@ -84,7 +86,7 @@ async fn server_columns_sort_filter_and_keep_full_objects() {
         true,
     );
     assert_eq!(app.display_headers().to_vec(), ["NAME", "COUNT", "RATIO"]);
-    sort_by(&mut app, "COUNT");
+    sort_ascending(&mut app, "COUNT");
     assert_eq!(row_names(&app), ["small", "large", "missing"]);
     app.handle_key(press(KeyCode::Char('w'))).unwrap();
     assert_eq!(
@@ -203,7 +205,7 @@ async fn periodic_cells_and_watch_resets_invalidate_cached_values() {
         table(&[first.clone(), second.clone()], &[json!(2), json!(10)]),
         true,
     );
-    sort_by(&mut app, "COUNT");
+    sort_ascending(&mut app, "COUNT");
     assert_eq!(row_names(&app), ["one", "two"]);
     deliver(
         &mut app,
@@ -368,7 +370,12 @@ async fn sort_only_config_applies_when_server_columns_arrive() {
     deliver(&mut app, table(&objects, &[json!(10), json!(2)]), true);
     assert!(app.sort_desc);
     assert_eq!(row_names(&app), ["large", "small"]);
-    sort_by(&mut app, "COUNT");
+    // Re-picking the active column inverts it.
+    app.handle_key(press(KeyCode::Char('S'))).unwrap();
+    for ch in "COUNT".chars() {
+        app.handle_key(press(KeyCode::Char(ch))).unwrap();
+    }
+    app.handle_key(press(KeyCode::Enter)).unwrap();
     app.handle_key(press(KeyCode::Char('w'))).unwrap();
     assert!(!app.sort_desc);
     assert_eq!(row_names(&app), ["small", "large"]);
