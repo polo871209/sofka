@@ -3,6 +3,10 @@
 __pycache__/
 /.venv/
 .pi*
+# Project pi prompt templates are shared, the rest of .pi stays local.
+!/.pi/
+/.pi/*
+!/.pi/prompts/
 
 # macOS
 .DS_Store
