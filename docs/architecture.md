@@ -32,6 +32,9 @@ pvcexplore.rs PVC browsing: which pod already mounts a claim, the helper pod
              progress-bar arithmetic behind a running copy, all pure and
              unit-tested. `app/pvcexplore.rs` drives it, `app/transfer.rs`
              samples a `kubectl cp` in flight.
+portforward.rs Port-forwarding through the API: local listeners, kubectl-style
+             target resolution (svc/deploy → pod, named ports), one API
+             stream per local connection.
 ui.rs        All ratatui rendering: header, table, scrollable views, popups,
              status bar.
 theme.rs     Palette + semantic styles, skin resolution.

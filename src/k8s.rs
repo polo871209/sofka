@@ -685,6 +685,9 @@ impl Kind {
     }
 }
 
+/// The result of [`Cluster::rediscover`].
+pub struct Rediscovery(discovery::Discovered);
+
 /// Connection + discovery context for a cluster.
 pub struct Cluster {
     pub client: Client,
@@ -1113,6 +1116,21 @@ impl Cluster {
         self.discovery_fallback = discovered.fallback;
         self.register_resources(discovered.resources);
         Ok(())
+    }
+
+    /// Run API discovery again off the UI task, for kinds added after connect.
+    pub async fn rediscover(client: Client) -> Result<Rediscovery> {
+        Ok(Rediscovery(discovery::discover(&client).await?))
+    }
+
+    /// Add the kinds from [`Self::rediscover`]. Kinds that disappeared stay
+    /// registered until the next connect.
+    pub fn apply_rediscovery(&mut self, rediscovery: Rediscovery) {
+        let discovered = rediscovery.0;
+        self.child_kinds = discovered.child_kinds;
+        self.discovery_warnings = discovered.skipped;
+        self.discovery_fallback = discovered.fallback;
+        self.register_resources(discovered.resources);
     }
 
     fn register_resources(&mut self, mut resources: Vec<discovery::Resource>) {
