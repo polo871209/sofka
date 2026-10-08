@@ -3,6 +3,7 @@ use super::*;
 /// Fallback delay if the watcher backoff ever runs out of steps. `DefaultBackoff`
 /// is unbounded in attempts, so this is belt and braces rather than a real path.
 const NODE_PODS_BACKOFF_CEILING: Duration = Duration::from_secs(30);
+const REDISCOVERY_COOLDOWN: Duration = Duration::from_secs(10);
 
 fn node_pods_watch_forbidden(error: &watcher::Error) -> bool {
     match error {
@@ -113,10 +114,71 @@ impl App {
                 self.start_watch();
             }
             None => {
-                self.flash = format!("No resource matches '{}'", input.trim());
-                self.flash_err = true;
+                if !self.start_rediscovery(input, ns) {
+                    self.flash = format!("No resource matches '{}'", input.trim());
+                    self.flash_err = true;
+                }
             }
         }
+    }
+
+    /// Run API discovery again for a name that resolves to nothing, so a CRD
+    /// installed after connect opens without a restart. At most one run per
+    /// [`REDISCOVERY_COOLDOWN`], so typos cost no more than one run.
+    fn start_rediscovery(&mut self, input: &str, ns: Option<&str>) -> bool {
+        if !self.cluster.connected
+            || self
+                .rediscovery
+                .as_ref()
+                .is_some_and(|r| r.started.elapsed() < REDISCOVERY_COOLDOWN)
+        {
+            return false;
+        }
+        self.rediscovery = Some(super::Rediscovery {
+            started: std::time::Instant::now(),
+            pending: Some((self.generation, input.to_string(), ns.map(str::to_string))),
+        });
+        let client = self.cluster.client.clone();
+        let cluster = (
+            self.cluster.context.clone(),
+            self.cluster.cluster_url.clone(),
+        );
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = Cluster::rediscover(client).await.map_err(|e| e.to_string());
+            let _ = tx.send(Msg::Rediscovered { cluster, result }).await;
+        });
+        self.flash = format!("Looking up '{}' in API discovery…", input.trim());
+        self.flash_err = false;
+        true
+    }
+
+    fn finish_rediscovery(&mut self, result: Result<crate::k8s::Rediscovery, String>) {
+        let pending = self.rediscovery.as_mut().and_then(|r| r.pending.take());
+        let failed = result.as_ref().err().cloned();
+        if let Ok(rediscovery) = result {
+            self.cluster.apply_rediscovery(rediscovery);
+            self.cluster.add_aliases(&self.user_aliases);
+        }
+        // Open the kind only if the user is still where they typed it.
+        let Some((generation, input, ns)) = pending else {
+            return;
+        };
+        if generation != self.generation || self.mode != Mode::Table {
+            return;
+        }
+        if self.cluster.resolve(&input).is_some() {
+            self.switch_kind_ns(&input, ns.as_deref());
+            return;
+        }
+        self.flash = match failed {
+            Some(error) => format!(
+                "No resource matches '{}'. API discovery failed: {error}",
+                input.trim()
+            ),
+            None => format!("No resource matches '{}'", input.trim()),
+        };
+        self.flash_err = true;
     }
 
     /// Install `kind` as a fresh root view (not a drill-down): clear the
@@ -677,7 +739,8 @@ impl App {
         }
     }
 
-    /// Poll the metrics API every few seconds for the current pods/nodes view.
+    /// Poll the metrics API for the current pods/nodes view, paced to the
+    /// metrics-server sample period (see `metrics_cadence`).
     pub(super) fn spawn_metrics_poll(&mut self) {
         let base = self.kind_plural.clone();
         let Some(mkind) = self.cluster.resolve(&format!("{base}.metrics.k8s.io")) else {
@@ -697,6 +760,7 @@ impl App {
         let is_node = base == "nodes";
 
         let handle = tokio::spawn(async move {
+            let mut cadence = super::metrics_cadence::MetricsCadence::default();
             loop {
                 if flag.load(Ordering::SeqCst) != genr {
                     break;
@@ -720,6 +784,9 @@ impl App {
                         }
                     }
                 }
+                // A partial result has no reliable newest sample.
+                let newest =
+                    super::metrics_cadence::newest_sample(&items).filter(|_| failure.is_none());
                 let msg = {
                     let mut data = HashMap::new();
                     let mut containers = HashMap::new();
@@ -753,7 +820,8 @@ impl App {
                         })
                         .await;
                 }
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                let delay = cadence.next_delay(newest, tokio::time::Instant::now().into_std());
+                tokio::time::sleep(delay).await;
             }
         });
         self.tasks.push(handle);
@@ -1222,6 +1290,11 @@ impl App {
                 crate::log_error!("task.panic", error = error);
                 self.last_error = Some(error.clone());
                 self.borrow_status(format!("internal error: {error}"), true);
+            }
+            Msg::Rediscovered { cluster, result }
+                if cluster.0 == self.cluster.context && cluster.1 == self.cluster.cluster_url =>
+            {
+                self.finish_rediscovery(result);
             }
             Msg::Notify { epoch, text } if epoch == self.notify_epoch => {
                 self.borrow_status(format!("🔔 {text}"), false);

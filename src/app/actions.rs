@@ -1202,10 +1202,9 @@ impl App {
         self.mode = Mode::PortForwardPicker;
     }
 
-    /// Start `kubectl port-forward` in the background (not a foreground
-    /// `Suspend::Shell` — a forward should keep running while you keep
-    /// browsing). stdio is nulled since the TUI still owns the terminal.
-    /// `config_name` links the child back to its `[[forwards]]` entry.
+    /// Start a background port-forward (not a foreground `Suspend::Shell`,
+    /// because a forward keeps running while you browse). `config_name` links
+    /// it back to its `[[forwards]]` entry.
     pub(super) fn start_port_forward_named(
         &mut self,
         ns: String,
@@ -1213,24 +1212,18 @@ impl App {
         ports: String,
         config_name: Option<String>,
     ) -> bool {
-        let mut argv = self.kubectl_base();
-        argv.push("port-forward".into());
-        if !ns.is_empty() {
-            argv.push("-n".into());
-            argv.push(ns.clone());
-        }
-        argv.push(target.clone());
-        argv.push(ports.clone());
-        match (self.pf_spawner)(&argv) {
-            Ok(child) => {
+        match (self.pf_spawner)(self.cluster.client.clone(), &ns, &target, &ports) {
+            Ok(started) => {
+                let remote = ports.split_once(':').map_or(ports.as_str(), |(_, r)| r);
                 let pf = PortForward {
                     context: self.cluster.context.clone(),
                     cluster_url: self.cluster.cluster_url.clone(),
                     ns,
                     target,
-                    ports,
+                    ports: format!("{}:{remote}", started.local),
                     config_name,
-                    child,
+                    task: started.task,
+                    exit: started.exit,
                 };
                 self.flash = format!("port-forwarding {} (:pf to view/stop)", pf.label());
                 self.flash_err = false;
@@ -1344,18 +1337,18 @@ impl App {
             .collect()
     }
 
-    /// Drop any forward whose `kubectl` process has already exited (pod
-    /// restarted, connection dropped, port in use, …), flashing a heads-up.
-    /// Called on every tick, so a dead forward doesn't linger in the list.
+    /// Drop any forward that has stopped (pod deleted, target not found, …),
+    /// flashing the reason. Called on every tick, so a dead forward doesn't
+    /// linger in the list.
     pub fn reap_port_forwards(&mut self) {
         let mut i = 0;
         while i < self.port_forwards.len() {
-            match self.port_forwards[i].child.try_wait() {
-                Ok(Some(_)) => {
+            match self.port_forwards[i].exited() {
+                Some(reason) => {
                     let pf = self.port_forwards.remove(i);
-                    self.flash_warn(&format!("port-forward {} exited", pf.label()));
+                    self.flash_warn(&format!("port-forward {} exited: {reason}", pf.label()));
                 }
-                _ => i += 1,
+                None => i += 1,
             }
         }
     }
@@ -1721,7 +1714,7 @@ impl App {
         if i >= self.port_forwards.len() {
             return;
         }
-        let pf = self.port_forwards.remove(i); // dropped -> Drop kills the child
+        let pf = self.port_forwards.remove(i); // dropped -> Drop aborts the task
         self.flash = format!("stopped port-forward {}", pf.label());
         self.flash_err = false;
         // A stopped configured forward reappears in the stopped tail, so

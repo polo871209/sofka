@@ -974,6 +974,7 @@ impl App {
         self.crd_views.clear();
         // Cached view snapshots hold the old cluster's resources.
         self.clear_view_cache();
+        self.rediscovery = None;
         // The timeline recorded the old cluster's objects.
         self.timeline.clear();
         self.skin_colors = resolved.config.skin.colors;

@@ -256,7 +256,7 @@ columns = [
 
 Each trend cell has 12 bars in 25-second bins, newest on the right. A bar
 shows the highest sample in its bin as a percentage of allocatable, so nodes of
-different sizes are comparable. A dot marks a bin without a sample or a node
+different sizes are comparable. Metrics polls follow the metrics-server sample period, so a bin can have no poll. Such a bin repeats the previous bin for up to two bins. A dot marks a longer gap or a node
 without allocatable. History is kept for every node while the nodes view is
 open, clears on a view or context change, and is not saved between sessions.
 Sorting, filtering, and the cell color use the latest percentage.
