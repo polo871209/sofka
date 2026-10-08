@@ -825,7 +825,8 @@ impl App {
         }
     }
 
-    /// Poll the metrics API every few seconds for the current pods/nodes view.
+    /// Poll the metrics API for the current pods/nodes view, paced to the
+    /// metrics-server sample period (see `metrics_cadence`).
     pub(super) fn spawn_metrics_poll(&mut self) {
         let base = self.kind_plural.clone();
         let Some(mkind) = self.cluster.resolve(&format!("{base}.metrics.k8s.io")) else {
@@ -845,6 +846,7 @@ impl App {
         let is_node = base == "nodes";
 
         let handle = tokio::spawn(async move {
+            let mut cadence = super::metrics_cadence::MetricsCadence::default();
             loop {
                 if flag.load(Ordering::SeqCst) != genr {
                     break;
@@ -868,6 +870,9 @@ impl App {
                         }
                     }
                 }
+                // A partial result has no reliable newest sample.
+                let newest =
+                    super::metrics_cadence::newest_sample(&items).filter(|_| failure.is_none());
                 let msg = {
                     let mut data = HashMap::new();
                     let mut containers = HashMap::new();
@@ -901,7 +906,8 @@ impl App {
                         })
                         .await;
                 }
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                let delay = cadence.next_delay(newest, tokio::time::Instant::now().into_std());
+                tokio::time::sleep(delay).await;
             }
         });
         self.tasks.push(handle);

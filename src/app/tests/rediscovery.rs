@@ -97,7 +97,7 @@ async fn a_lookup_that_still_misses_shows_the_usual_error() {
 }
 
 #[tokio::test]
-async fn rediscovery_is_throttled_to_one_per_five_seconds() {
+async fn rediscovery_is_throttled_to_one_per_ten_seconds() {
     let (mut app, _rx) = test_app();
     palette(&mut app, "widgets");
     assert!(!app.flash_err, "{}", app.flash);
@@ -114,7 +114,12 @@ async fn rediscovery_is_throttled_to_one_per_five_seconds() {
     assert!(app.flash_err);
     assert_eq!(app.flash, "No resource matches 'gadgets'");
 
-    app.last_rediscovery = Some(std::time::Instant::now() - Duration::from_secs(6));
+    app.last_rediscovery = Some(std::time::Instant::now() - Duration::from_secs(9));
+    palette(&mut app, "gadgets");
+    assert!(app.flash_err);
+    assert_eq!(app.flash, "No resource matches 'gadgets'");
+
+    app.last_rediscovery = Some(std::time::Instant::now() - Duration::from_secs(11));
     palette(&mut app, "gadgets");
     assert!(!app.flash_err, "{}", app.flash);
     assert!(app.flash.contains("looking up 'gadgets'"), "{}", app.flash);
@@ -158,7 +163,7 @@ async fn a_superseded_run_does_not_answer_the_newer_lookup() {
     palette(&mut app, "widgets");
     let first = app.rediscovery_request;
     // The first run is still going when the throttle lets a second one start.
-    app.last_rediscovery = Some(std::time::Instant::now() - Duration::from_secs(6));
+    app.last_rediscovery = Some(std::time::Instant::now() - Duration::from_secs(11));
     palette(&mut app, "gadgets");
     assert!(!app.flash_err, "{}", app.flash);
 
