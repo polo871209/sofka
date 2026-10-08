@@ -5,7 +5,7 @@
 use super::*;
 
 /// Wait at least this long between miss-triggered discovery runs.
-pub(super) const REDISCOVERY_THROTTLE: Duration = Duration::from_secs(5);
+pub(super) const REDISCOVERY_THROTTLE: Duration = Duration::from_secs(10);
 
 /// The lookup to run again once discovery finishes.
 pub(super) enum Retry {

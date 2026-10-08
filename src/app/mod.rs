@@ -259,38 +259,47 @@ pub enum Suspend {
     },
 }
 
-/// A `kubectl port-forward` running in the background (not `Suspend::Shell`
-/// — a forward is meant to keep running while you go do other things, unlike
-/// exec/edit which are inherently foreground-interactive). Killed on drop so
-/// a quit (or panic-unwind) never leaves an orphaned `kubectl` holding the
-/// local port open.
+/// A port-forward running in the background, so it keeps running while you
+/// browse. Aborted on drop, so a quit never leaves the local port bound.
 pub struct PortForward {
     context: String,
     cluster_url: String,
     ns: String,
     target: String,
+    /// `LOCAL:REMOTE` with the bound local port, also when 0 was requested.
     ports: String,
     /// The `[[forwards]]` entry this instance was started from, if any —
-    /// links a running child back to its saved config in `:pf`.
+    /// links a running forward back to its saved config in `:pf`.
     pub(super) config_name: Option<String>,
-    child: tokio::process::Child,
+    task: tokio::task::JoinHandle<()>,
+    exit: crate::portforward::Exit,
 }
 
 impl PortForward {
     pub fn label(&self) -> String {
         format!("{} {} -n {}", self.target, self.ports, self.ns)
     }
+
+    /// Why the forward stopped, once it has.
+    fn exited(&self) -> Option<String> {
+        if !self.task.is_finished() {
+            return None;
+        }
+        let reason = self.exit.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        Some(reason.unwrap_or_else(|| "stopped".into()))
+    }
 }
 
 impl Drop for PortForward {
     fn drop(&mut self) {
-        let _ = self.child.start_kill();
+        self.task.abort();
     }
 }
 
-/// Spawns a background `kubectl port-forward` child. Overridable in tests
-/// so the unit suite doesn't require `kubectl` on PATH.
-type PortForwardSpawner = fn(&[String]) -> std::io::Result<tokio::process::Child>;
+/// Starts a port-forward: `(client, namespace, target, ports)`. Overridable
+/// in tests so the unit suite needs no cluster.
+type PortForwardSpawner =
+    fn(kube::Client, &str, &str, &str) -> std::io::Result<crate::portforward::Started>;
 
 /// Looks up the latest release (`force` skips the daily cache). Overridable
 /// in tests so the unit suite never reaches GitHub.
@@ -306,15 +315,6 @@ fn default_update_fetcher(
     Box<dyn std::future::Future<Output = Result<crate::update::Release, String>> + Send>,
 > {
     Box::pin(crate::update::check(force))
-}
-
-fn default_pf_spawner(argv: &[String]) -> std::io::Result<tokio::process::Child> {
-    tokio::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
 }
 
 /// How dependents are handled on delete (kubectl `--cascade`, k9s propagation
@@ -2472,11 +2472,9 @@ pub struct App {
     /// needs input, so a retrying watch asks once instead of on every error.
     auth_offered: Option<u64>,
 
-    /// Background `kubectl port-forward` processes started with `f`/`F`.
-    /// Viewed/stopped via `:pf`; killed automatically on drop.
+    /// Background port-forwards started with `f`/`F` or `[[forwards]]`.
+    /// Viewed/stopped via `:pf`; aborted automatically on drop.
     pub port_forwards: Vec<PortForward>,
-    /// Injectable spawner for `kubectl port-forward` children. Tests override
-    /// this to avoid depending on `kubectl` being on PATH.
     pf_spawner: PortForwardSpawner,
     pub pf_state: ListState,
     /// Port-forward picker (`f`): the declared ports of the selected object,
@@ -2950,7 +2948,7 @@ impl App {
             confirm_return: Mode::Table,
             auth_offered: None,
             port_forwards: Vec::new(),
-            pf_spawner: default_pf_spawner,
+            pf_spawner: crate::portforward::start,
             forwards_cfg: Vec::new(),
             pf_picker_items: Vec::new(),
             pf_picker_in_use: Vec::new(),
@@ -3204,6 +3202,7 @@ mod lifecycle;
 mod log_follow;
 mod logs;
 pub use logs::{JsonView, RecordPart, RecordSpan};
+mod metrics_cadence;
 mod metrics_history;
 mod mouse;
 mod namespace_patterns;
