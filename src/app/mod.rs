@@ -2109,6 +2109,7 @@ pub struct App {
     pub col_scroll_max: usize,
     pub filter: String,
     pub faults_only: bool,
+    pub show_completed: bool,
     /// Parsed form of `filter`, refreshed lazily when the string changes so
     /// neither row matching nor rendering reparses it per frame.
     filter_cache: RefCell<FilterCache>,
@@ -2682,6 +2683,7 @@ impl App {
             col_scroll_max: 0,
             filter: String::new(),
             faults_only: false,
+            show_completed: false,
             filter_cache: RefCell::new(FilterCache {
                 raw: String::new(),
                 parsed: crate::filter::parse(""),

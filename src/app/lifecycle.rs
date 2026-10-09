@@ -1199,6 +1199,10 @@ impl App {
                 // for the session diff (`:diff` on objects with no
                 // last-applied annotation).
                 let prev = self.store.latest(&key);
+                let completion_changed = self.completed_hidden()
+                    && prev.is_some_and(|prev| {
+                        super::rows::pod_succeeded(prev) != super::rows::pod_succeeded(&obj)
+                    });
                 self.timeline
                     .observe(&self.kind_plural, &key, prev.map(Arc::as_ref), &obj);
                 // `:diff` reads the annotation first, so a copy kept for an
@@ -1217,6 +1221,7 @@ impl App {
                 }
                 match self.store.apply(key.clone(), *obj) {
                     StoreMutation::Inserted => self.invalidate_row(&key),
+                    StoreMutation::Updated if completion_changed => self.invalidate_row(&key),
                     StoreMutation::Updated => self.invalidate_row_contents(&key),
                     StoreMutation::Buffered | StoreMutation::Removed | StoreMutation::Unchanged => {
                     }

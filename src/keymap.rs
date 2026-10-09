@@ -126,6 +126,7 @@ actions! {
     Json => ("json", "JSON view: raw/record/pretty"),
     Timestamps => ("timestamps", "timestamps"),
     Toggle => ("toggle", "toggle"),
+    ToggleCompleted => ("toggle_completed", "show or hide completed pods"),
     Transfer => ("transfer", "transfer"),
     Uncordon => ("uncordon", "uncordon"),
     Up => ("up", "up"),
@@ -151,7 +152,9 @@ impl Action {
     /// its key goes to bookmarks, workspaces, and plugins first.
     pub fn kinds(self) -> Option<&'static [&'static str]> {
         match self {
-            Self::Faults | Self::Attach | Self::PreviousLogs => Some(&["pods"]),
+            Self::Faults | Self::Attach | Self::PreviousLogs | Self::ToggleCompleted => {
+                Some(&["pods"])
+            }
             Self::PortForward => Some(&["pods", "services"]),
             Self::Inspect => Some(&["secrets", "persistentvolumeclaims"]),
             Self::Cordon | Self::Uncordon | Self::Drain => Some(&["nodes"]),
@@ -598,6 +601,7 @@ const DEFAULTS: &[(&str, Action, &[&str])] = &[
     ("table", Action::ShellOrScale, &["s"]),
     ("table", Action::Sort, &["S"]),
     ("table", Action::Timeline, &["T"]),
+    ("table", Action::ToggleCompleted, &["h"]),
     ("table", Action::Uncordon, &["U"]),
     ("table", Action::Up, &["k", "up"]),
     ("table", Action::Wide, &["w"]),

@@ -344,6 +344,7 @@ impl App {
                     self.table_state.select(Some(0));
                 }
             }
+            (Some(Action::ToggleCompleted), _) => self.toggle_completed(),
             (Some(Action::Filter), _) => self.mode = Mode::Filter,
             (Some(Action::Exit), _) => self.should_quit = true,
             (Some(Action::Back), _) => {

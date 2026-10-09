@@ -905,6 +905,15 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
     if app.external_secret_kind() {
         lines.push((Action::RestartOrRefresh, "force-sync"));
     }
+    if app.completed_toggle_available() {
+        let label = if app.show_completed {
+            "hide completed"
+        } else {
+            "show completed"
+        };
+        let first_column_slot = lines.len() / HEADER_HINT_COLUMNS.len() * HEADER_HINT_COLUMNS.len();
+        lines.insert(first_column_slot, (Action::ToggleCompleted, label));
+    }
     // Fill a 3-column grid so the columns stay aligned. The header has 5 inner rows.
     lines
         .chunks(HEADER_HINT_COLUMNS.len())

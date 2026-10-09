@@ -361,6 +361,7 @@ include those conditions. Row filters can search the route paths.
   clears. Palette queries combine scope and filtering:
   `:pods -n prod --context west /-l app=api status=Running`.
   See [filter grammar and selectors](filtering.md).
+- **Completed pods** (`h`, pods only) are hidden by default. The full pod list hides pods in the `Succeeded` phase, and failed pods stay visible. Press `h` to show them and press it again to hide them. The header hint shows the current action. Drilled pod lists, such as job → pods, always show completed pods.
 - **Toggle faults** (`Ctrl+Z`, pods only) shows pending, failed, unknown,
   terminating, and running pods that are not ready. Completed pods are hidden.
   The table title shows `[faults]` while the filter is on. It works with the

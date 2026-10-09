@@ -9,6 +9,7 @@ use tokio::sync::mpsc::{self, Receiver};
 
 #[cfg(unix)]
 mod clipboard;
+mod completed_pods;
 mod credentials;
 mod exec_auth;
 mod flux;
@@ -9172,6 +9173,7 @@ async fn sort_picker_picks_toggles_and_clears() {
 async fn views_open_sorted_by_status_with_failures_first() {
     let (mut app, _rx) = test_app();
     palette(&mut app, "pods");
+    app.handle_key(press(KeyCode::Char('h'))).unwrap();
     for (name, phase) in [
         ("a-done", "Succeeded"),
         ("b-running", "Running"),
@@ -21774,6 +21776,7 @@ fn faults_test_pod(name: &str) -> Value {
 async fn ctrl_z_filters_pod_faults() {
     let (mut app, _rx) = test_app();
     app.switch_kind("pods");
+    app.handle_key(press(KeyCode::Char('h'))).unwrap();
     let healthy = faults_test_pod("healthy");
     let mut cases = vec![(healthy.clone(), false)];
     for phase in ["Pending", "Failed", "Unknown", "Succeeded"] {
@@ -25425,6 +25428,7 @@ async fn sidecar_failures_remain_visible_after_initialization() {
     ] {
         let (mut app, _rx) = test_app();
         app.switch_kind("pods");
+        app.handle_key(press(KeyCode::Char('h'))).unwrap();
         let mut pod = health_test_pod("a-sidecar");
         pod["spec"]["initContainers"] = json!([
             {"name": "setup"}, {"name": "proxy", "restartPolicy": "Always"}
@@ -36068,7 +36072,8 @@ async fn pod_header_keeps_action_columns_aligned() {
     assert_eq!(position("l logs").0, position("s shell").0);
     assert_eq!(position("L cloud logs").0, position("f port-fwd").0);
     assert_eq!(position("L cloud logs").0, position("t transfer").0);
-    assert_eq!(position("L cloud logs").0, position("ctrl-d delete").0);
+    assert_eq!(position("l logs").0, position("h show completed").0);
+    assert_eq!(position("p prev logs").0, position("ctrl-d delete").0);
 }
 
 #[tokio::test]
