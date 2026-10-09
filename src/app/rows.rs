@@ -72,6 +72,9 @@ impl App {
         if self.faults_filter_active() && !self.row_has_faults(o) {
             return false;
         }
+        if self.completed_hidden() && pod_succeeded(o) {
+            return false;
+        }
         if self.filter.is_empty() {
             return true;
         }
@@ -111,6 +114,39 @@ impl App {
         } else {
             crate::columns::object_faulted(group, plural, o).unwrap_or(true)
         }
+    }
+
+    /// Whether the table hides Succeeded pods. Only the full pod list hides
+    /// them, because a drilled list such as job → pods exists to show them.
+    pub fn completed_hidden(&self) -> bool {
+        self.completed_toggle_available() && !self.show_completed
+    }
+
+    pub fn completed_toggle_available(&self) -> bool {
+        self.kind_plural == "pods" && self.scope_label.is_none()
+    }
+
+    pub(super) fn toggle_completed(&mut self) {
+        if self.kind_plural != "pods" {
+            self.flash_warn("completed pod toggle applies to pods");
+            return;
+        }
+        if !self.completed_toggle_available() {
+            self.flash_warn("drilled pod lists always show completed pods");
+            return;
+        }
+        let selected = self.selected_ref().map(crate::store::row_key);
+        self.show_completed = !self.show_completed;
+        self.invalidate_rows();
+        self.ensure_rows_cache();
+        let index = selected.and_then(|key| {
+            self.rows_cache
+                .borrow()
+                .keys
+                .iter()
+                .position(|k| k.as_ref() == key)
+        });
+        self.table_state.select(Some(index.unwrap_or(0)));
     }
 
     fn eval_filter(
@@ -1519,6 +1555,10 @@ impl App {
         let half = Action::HalfPageDown.page_size(self.table_page_rows) as i32;
         self.move_selection(pages.saturating_mul(half));
     }
+}
+
+pub(super) fn pod_succeeded(o: &DynamicObject) -> bool {
+    o.data.at("/status/phase").and_then(Value::as_str) == Some("Succeeded")
 }
 
 fn pod_has_faults(o: &DynamicObject) -> bool {
