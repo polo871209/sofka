@@ -7,15 +7,13 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, BorderType, Borders, Clear, Gauge, HighlightSpacing, List, ListItem, ListState,
-    Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline,
+    Paragraph, Sparkline,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, DEFAULT_SORT_LABEL, Mode, Pane, SuggestKind, TRANSFER_MENU_ITEMS};
 use crate::{columns, theme};
-
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 struct RenderCell<'a> {
     content: Text<'a>,
@@ -210,7 +208,6 @@ fn draw_plugin_activity(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_base(frame: &mut Frame, app: &mut App) {
-    let show_scrollbars = app.scrollbars_visible();
     // Fill the whole frame with the skin's background first (when enabled), so
     // every view that only sets foreground colors sits on it. Widgets that set
     // their own background (the selection bar, gauges, search highlights) still
@@ -220,10 +217,8 @@ fn draw_base(frame: &mut Frame, app: &mut App) {
         frame.buffer_mut().set_style(area, Style::default().bg(bg));
     }
 
-    // Compact mode (ctrl-e) trades the 7-line header + footer for a single
-    // header line, so a small tiled pane is almost all table. The prompt line
-    // still appears while typing a command/filter; the status line and hint
-    // crumbs are folded away (a flash + sync dot ride in the compact header).
+    // Compact mode (ctrl-e) trades the 5-line header for a single header line,
+    // so a small tiled pane is almost all table.
     let compact = app.compact;
     let needs_prompt = matches!(
         app.mode,
@@ -272,21 +267,14 @@ fn draw_base(frame: &mut Frame, app: &mut App) {
             ])
             .split(frame.area());
         if document_mode == Mode::Diff {
-            draw_diff(frame, show_scrollbars, true, &mut app.detail, chunks[0]);
+            draw_diff(frame, true, &mut app.detail, chunks[0]);
         } else {
             let accent = if document_mode == Mode::Events {
                 theme::peach()
             } else {
                 theme::sky()
             };
-            draw_scrollable(
-                frame,
-                show_scrollbars,
-                true,
-                &mut app.detail,
-                chunks[0],
-                accent,
-            );
+            draw_scrollable(frame, true, &mut app.detail, chunks[0], accent);
         }
         if app.mode == Mode::Command {
             draw_palette(frame, app, chunks[0]);
@@ -308,17 +296,19 @@ fn draw_base(frame: &mut Frame, app: &mut App) {
         } else if compact {
             1
         } else {
-            7
+            5
         }), // header
         Constraint::Min(3), // body
     ];
-    let prompt_idx = if !compact || needs_prompt {
+    // The bottom row exists only while typing, because key hints live in the header and `?`.
+    let prompt_idx = if needs_prompt {
         constraints.push(Constraint::Length(1));
         Some(constraints.len() - 1)
     } else {
         None
     };
-    let status_idx = if !compact {
+    // The full header shows the flash below `Count:`, so the status row exists only without a header.
+    let status_idx = if !compact && app.hide_header {
         constraints.push(Constraint::Length(1));
         Some(constraints.len() - 1)
     } else {
@@ -338,47 +328,21 @@ fn draw_base(frame: &mut Frame, app: &mut App) {
     }
 
     match app.mode {
-        Mode::Detail => draw_scrollable(
-            frame,
-            show_scrollbars,
-            false,
-            &mut app.detail,
-            chunks[1],
-            theme::sky(),
-        ),
-        Mode::Diff => draw_diff(frame, show_scrollbars, false, &mut app.detail, chunks[1]),
-        Mode::Events => draw_scrollable(
-            frame,
-            show_scrollbars,
-            false,
-            &mut app.detail,
-            chunks[1],
-            theme::peach(),
-        ),
+        Mode::Detail => draw_scrollable(frame, false, &mut app.detail, chunks[1], theme::sky()),
+        Mode::Diff => draw_diff(frame, false, &mut app.detail, chunks[1]),
+        Mode::Events => draw_scrollable(frame, false, &mut app.detail, chunks[1], theme::peach()),
         Mode::Logs | Mode::LogFilter => draw_logs(frame, app, chunks[1]),
         // The lookback prompt opens from the logs view — keep it underneath.
         Mode::Prompt if app.prompt_over_logs() => draw_logs(frame, app, chunks[1]),
         // While typing a doc search, keep drawing the view it was opened from
         // so the matches narrow live under the prompt.
         Mode::DocFilter => match app.doc_filter_return {
-            Mode::Diff => draw_diff(frame, show_scrollbars, false, &mut app.detail, chunks[1]),
-            Mode::Events => draw_scrollable(
-                frame,
-                show_scrollbars,
-                false,
-                &mut app.detail,
-                chunks[1],
-                theme::peach(),
-            ),
+            Mode::Diff => draw_diff(frame, false, &mut app.detail, chunks[1]),
+            Mode::Events => {
+                draw_scrollable(frame, false, &mut app.detail, chunks[1], theme::peach())
+            }
             Mode::Help => draw_help(frame, app, chunks[1]),
-            _ => draw_scrollable(
-                frame,
-                show_scrollbars,
-                false,
-                &mut app.detail,
-                chunks[1],
-                theme::sky(),
-            ),
+            _ => draw_scrollable(frame, false, &mut app.detail, chunks[1], theme::sky()),
         },
         Mode::Help => draw_help(frame, app, chunks[1]),
         Mode::Pulse => draw_pulse(frame, app, chunks[1]),
@@ -404,42 +368,20 @@ fn draw_base(frame: &mut Frame, app: &mut App) {
         }
         // The Flux warning for `e` in a document view, and the decoded Secret
         // update, keep the document underneath, like the view they return to.
-        Mode::Confirm if app.confirm_over_document() => draw_scrollable(
-            frame,
-            show_scrollbars,
-            false,
-            &mut app.detail,
-            chunks[1],
-            theme::sky(),
-        ),
-        Mode::Prompt if app.prompt_over_document() => draw_scrollable(
-            frame,
-            show_scrollbars,
-            false,
-            &mut app.detail,
-            chunks[1],
-            theme::sky(),
-        ),
+        Mode::Confirm if app.confirm_over_document() => {
+            draw_scrollable(frame, false, &mut app.detail, chunks[1], theme::sky())
+        }
+        Mode::Prompt if app.prompt_over_document() => {
+            draw_scrollable(frame, false, &mut app.detail, chunks[1], theme::sky())
+        }
         // While the palette is open, keep drawing the view it was opened
         // from, so a global `:` never flashes the table underneath it.
         Mode::Command => match app.palette_return {
-            Mode::Diff => draw_diff(frame, show_scrollbars, false, &mut app.detail, chunks[1]),
-            Mode::Events => draw_scrollable(
-                frame,
-                show_scrollbars,
-                false,
-                &mut app.detail,
-                chunks[1],
-                theme::peach(),
-            ),
-            Mode::Detail => draw_scrollable(
-                frame,
-                show_scrollbars,
-                false,
-                &mut app.detail,
-                chunks[1],
-                theme::sky(),
-            ),
+            Mode::Diff => draw_diff(frame, false, &mut app.detail, chunks[1]),
+            Mode::Events => {
+                draw_scrollable(frame, false, &mut app.detail, chunks[1], theme::peach())
+            }
+            Mode::Detail => draw_scrollable(frame, false, &mut app.detail, chunks[1], theme::sky()),
             Mode::Logs => draw_logs(frame, app, chunks[1]),
             Mode::Help => draw_help(frame, app, chunks[1]),
             Mode::Pulse => draw_pulse(frame, app, chunks[1]),
@@ -521,35 +463,12 @@ fn draw_base(frame: &mut Frame, app: &mut App) {
     }
 }
 
-/// Width reserved for the per-kind key-hint column inside the header box:
+/// Width reserved for the per-kind key-hint column inside the header:
 /// Three fixed columns with two spaces between columns.
 const HEADER_HINT_COLUMNS: [usize; 3] = [16, 13, 13];
 const HEADER_HINTS_WIDTH: u16 = 46;
 /// Minimum width the info cluster keeps before the hint column may appear.
 const HEADER_INFO_MIN: u16 = 44;
-/// Width of the logo column on the right of the header.
-const HEADER_LOGO_WIDTH: u16 = 26;
-
-fn header_title(server_version: &str, update: Option<&str>) -> Line<'static> {
-    let mut spans = vec![Span::styled(" sofka ", theme::title())];
-    if !server_version.is_empty() {
-        spans.push(Span::styled("· K8s Rev: ", theme::dim()));
-        spans.push(Span::styled(
-            server_version.to_string(),
-            Style::default().fg(theme::sapphire()),
-        ));
-        spans.push(Span::raw(" "));
-    }
-    if let Some(version) = update {
-        spans.push(Span::styled("· ", theme::dim()));
-        spans.push(Span::styled(
-            format!("v{version} available"),
-            Style::default().fg(theme::yellow()),
-        ));
-        spans.push(Span::raw(" "));
-    }
-    Line::from(spans)
-}
 
 fn diagnostic_value<'a>(app: &App, value: &'a str) -> std::borrow::Cow<'a, str> {
     let mode = match app.mode {
@@ -565,15 +484,6 @@ fn diagnostic_value<'a>(app: &App, value: &'a str) -> std::borrow::Cow<'a, str> 
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
-    let hints = header_hints(app);
-    let show_hints = !hints.is_empty() && header_hints_fit(area.width);
-    let show_logo = !show_hints || header_logo_fits(area.width);
-    let logo_width = if show_logo { HEADER_LOGO_WIDTH } else { 0 };
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(30), Constraint::Length(logo_width)])
-        .split(area);
-
     let ns = if app.all_namespaces() {
         "<all>".to_string()
     } else {
@@ -597,17 +507,11 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         ])
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(theme::border())
-        .title(header_title(
-            &app.cluster.server_version,
-            app.available_update()
-                .map(|release| release.version.as_str()),
-        ));
-    let inner = block.inner(cols[0]);
-    frame.render_widget(block, cols[0]);
+    // Borderless (k9s-style) and untitled: four info rows and the flash, then the table directly below.
+    let inner = area.inner(ratatui::layout::Margin::new(1, 0));
+
+    let hints = header_hints(app);
+    let show_hints = !hints.is_empty() && header_hints_fit(area.width);
 
     let info_width = if show_hints {
         inner.width.saturating_sub(HEADER_HINTS_WIDTH)
@@ -636,6 +540,12 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(theme::red()),
         ));
     }
+    if let Some(release) = app.available_update() {
+        context_line.push_span(Span::styled(
+            format!("  v{} available", release.version),
+            Style::default().fg(theme::yellow()),
+        ));
+    }
     let mut namespace_line = field("Namespace:", ns.clone(), theme::green());
     let favorites_width = usize::from(info_width).saturating_sub(12 + ns.width());
     for span in favorite_namespace_spans(app, favorites_width) {
@@ -650,14 +560,10 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     }
     let info = vec![
         context_line,
-        field(
-            "Cluster:",
-            app.cluster.cluster_url.clone(),
-            theme::sapphire(),
-        ),
         namespace_line,
         field("Resource:", kind, theme::peach()),
         count_line,
+        flash_line(app, ""),
     ];
 
     // Per-kind key hints share the box with the info cluster (k9s-style);
@@ -675,40 +581,6 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(Paragraph::new(hints), sub[1]);
     } else {
         frame.render_widget(Paragraph::new(info), inner);
-    }
-
-    if show_logo {
-        // Sophie the Russian Blue: tall pointed ears, a narrow watchful stare
-        // (not round cutesy eyes), cool grey-blue coat. Lines are equal width so
-        // the right-aligned block stays coherent.
-        let logo = vec![
-            Line::from(Span::styled(
-                "  /\\       /\\  ",
-                Style::default().fg(theme::overlay1()),
-            )),
-            Line::from(Span::styled(
-                " /  \\_____/  \\ ",
-                Style::default().fg(theme::overlay1()),
-            )),
-            Line::from(Span::styled(
-                "(  -       -  )",
-                Style::default().fg(theme::green()),
-            )),
-            Line::from(Span::styled(
-                " \\     ᴥ     / ",
-                Style::default().fg(theme::maroon()),
-            )),
-            Line::from(Span::styled(
-                "  \\   \\_/   /  ",
-                Style::default().fg(theme::overlay1()),
-            )),
-            Line::from(Span::styled(
-                "   '-------'   ",
-                Style::default().fg(theme::overlay1()),
-            )),
-            Line::from(Span::styled(format!("   sofka v{VERSION}"), theme::dim())),
-        ];
-        frame.render_widget(Paragraph::new(logo).alignment(Alignment::Right), cols[1]);
     }
 }
 
@@ -771,9 +643,6 @@ fn favorite_namespace_spans(app: &App, width: usize) -> Vec<Span<'static>> {
     spans
 }
 
-/// Columns the compact header keeps on the right for the live/sync dot.
-const COMPACT_SYNC_WIDTH: u16 = 10;
-
 /// The single-line header for compact mode (`ctrl-e`): kind · count ·
 /// namespace · context on the left; a transient flash and the live/sync dot on
 /// the right. Everything the full header shows that still matters when you've
@@ -795,7 +664,7 @@ fn draw_compact_header(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let mut spans = vec![
-        Span::styled(" sofka ", theme::title()),
+        Span::raw(" "),
         Span::styled(kind, Style::default().fg(theme::peach())),
         Span::styled(format!(" [{}]", app.store.len()), theme::dim()),
     ];
@@ -818,8 +687,7 @@ fn draw_compact_header(frame: &mut Frame, app: &App, area: Rect) {
     ]);
     let readonly_width = if app.readonly { " [ro]".width() } else { 0 };
     let used: usize = spans.iter().map(Span::width).sum();
-    let room = usize::from(area.width.saturating_sub(COMPACT_SYNC_WIDTH))
-        .saturating_sub(used + 1 + readonly_width);
+    let room = usize::from(area.width).saturating_sub(used + 1 + readonly_width);
     if let Some(badge) = app
         .context_badge
         .as_ref()
@@ -854,45 +722,13 @@ fn draw_compact_header(frame: &mut Frame, app: &App, area: Rect) {
         ));
     }
 
-    let (synced, sync_color) = if app.refresh_task.is_some() {
-        ("● refresh", theme::sky())
-    } else if app.resource_refresh_available() {
-        ("○ stopped", theme::overlay1())
-    } else if app.ns_resources_active() && app.mode == Mode::Table && app.store.synced {
-        ("○ snapshot", theme::overlay1())
-    } else {
-        sync_indicator(
-            app.mode,
-            app.doc_filter_return,
-            app.store.synced,
-            app.watch_polling,
-        )
-    };
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(10), Constraint::Length(COMPACT_SYNC_WIDTH)])
-        .split(area);
-    frame.render_widget(Paragraph::new(Line::from(spans)), cols[0]);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            synced,
-            Style::default().fg(sync_color),
-        )))
-        .alignment(Alignment::Right),
-        cols[1],
-    );
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Whether the frame is wide enough for the header's key-hint column:
-/// box borders (2) + info cluster + hints. The logo gives up its column
-/// before the hints do.
+/// side padding (2) + info cluster + hints.
 fn header_hints_fit(frame_width: u16) -> bool {
     frame_width.saturating_sub(2) >= HEADER_INFO_MIN + HEADER_HINTS_WIDTH
-}
-
-/// Whether the logo still fits next to the info cluster and the hints.
-fn header_logo_fits(frame_width: u16) -> bool {
-    header_hints_fit(frame_width.saturating_sub(HEADER_LOGO_WIDTH))
 }
 
 fn hint_key_style() -> Style {
@@ -981,338 +817,174 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
     ) {
         return Vec::new();
     }
+    // `⏎` follows a configured drill or node pointer before it opens the YAML,
+    // the order `App::drill` tries them in.
+    let open = match app.configured_drill() {
+        Some(drill) => Some(drill.kind),
+        None if app.flux_operator_kind()
+            && matches!(app.kind_plural.as_str(), "resourcesets" | "fluxinstances") =>
+        {
+            Some("gitops".to_string())
+        }
+        None => app.node_pointer().map(|_| "node".to_string()),
+    };
     let mut lines = match app.kind_plural.as_str() {
         "pods" => vec![
-            hint_line(
-                app,
-                &[
-                    (Action::Open, "containers"),
-                    (Action::Logs, "logs"),
-                    (Action::PreviousLogs, "prev logs"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::ShellOrScale, "shell"),
-                    (Action::ActionMenu, "transfer"),
-                    (Action::PortForward, "port-fwd"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::Yaml, "yaml"),
-                    (Action::Describe, "describe"),
-                    (Action::Events, "events"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::Edit, "edit"),
-                    (Action::Node, "node"),
-                    (Action::Owner, "owner"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::Explain, "explain"),
-                    (Action::Timeline, "timeline"),
-                    (Action::Delete, "delete"),
-                ],
-            ),
+            (Action::Logs, "logs"),
+            (Action::ProviderLogs, "cloud logs"),
+            (Action::PreviousLogs, "prev logs"),
+            (Action::ShellOrScale, "shell"),
+            (Action::PortForward, "port-fwd"),
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
+            (Action::Events, "events"),
+            (Action::Edit, "edit"),
+            (Action::Node, "node"),
+            (Action::ActionMenu, "transfer"),
+            (Action::Explain, "explain"),
+            (Action::Timeline, "timeline"),
+            (Action::Delete, "delete"),
         ],
         "deployments" | "statefulsets" => vec![
-            hint_line(
-                app,
-                &[
-                    (Action::Open, "pods"),
-                    (Action::Logs, "logs"),
-                    (Action::Events, "events"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::ShellOrScale, "scale"),
-                    (Action::RestartOrRefresh, "restart"),
-                    (Action::SetImage, "image"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::Yaml, "yaml"),
-                    (Action::Describe, "describe"),
-                    (Action::Edit, "edit"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::Explain, "explain"),
-                    (Action::Timeline, "timeline"),
-                    (Action::PortForward, "port-fwd"),
-                ],
-            ),
-            hint_line(app, &[(Action::Delete, "delete")]),
+            (Action::Logs, "logs"),
+            (Action::ProviderLogs, "cloud logs"),
+            (Action::ShellOrScale, "scale"),
+            (Action::RestartOrRefresh, "restart"),
+            (Action::SetImage, "image"),
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
+            (Action::Edit, "edit"),
+            (Action::Explain, "explain"),
+            (Action::Timeline, "timeline"),
+            (Action::PortForward, "port-fwd"),
+            (Action::Events, "events"),
+            (Action::RolloutHistory, "history"),
+            (Action::Delete, "delete"),
         ],
         "daemonsets" => vec![
-            hint_line(
-                app,
-                &[
-                    (Action::Open, "pods"),
-                    (Action::Logs, "logs"),
-                    (Action::Events, "events"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::RestartOrRefresh, "restart"),
-                    (Action::SetImage, "image"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::Yaml, "yaml"),
-                    (Action::Describe, "describe"),
-                    (Action::Edit, "edit"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[(Action::Explain, "explain"), (Action::Delete, "delete")],
-            ),
+            (Action::Logs, "logs"),
+            (Action::ProviderLogs, "cloud logs"),
+            (Action::RestartOrRefresh, "restart"),
+            (Action::SetImage, "image"),
+            (Action::Events, "events"),
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
+            (Action::Edit, "edit"),
+            (Action::Explain, "explain"),
+            (Action::RolloutHistory, "history"),
+            (Action::Delete, "delete"),
         ],
         "replicasets" | "jobs" => vec![
-            hint_line(
-                app,
-                &[
-                    (Action::Open, "pods"),
-                    (Action::Logs, "logs"),
-                    (Action::Events, "events"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::Yaml, "yaml"),
-                    (Action::Describe, "describe"),
-                    (Action::Edit, "edit"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::Explain, "explain"),
-                    (Action::Owner, "owner"),
-                    (Action::Delete, "delete"),
-                ],
-            ),
+            (Action::Logs, "logs"),
+            (Action::ProviderLogs, "cloud logs"),
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
+            (Action::Edit, "edit"),
+            (Action::Explain, "explain"),
+            (Action::Owner, "owner"),
+            (Action::Delete, "delete"),
+            (Action::Events, "events"),
         ],
         "services" => vec![
-            hint_line(
-                app,
-                &[(Action::Open, "pods"), (Action::PortForward, "port-fwd")],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::Yaml, "yaml"),
-                    (Action::Describe, "describe"),
-                    (Action::Edit, "edit"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[(Action::CopyCell, "copy cell"), (Action::Delete, "delete")],
-            ),
+            (Action::PortForward, "port-fwd"),
+            (Action::ProviderLogs, "cloud logs"),
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
+            (Action::Edit, "edit"),
+            (Action::CopyCell, "copy cell"),
+            (Action::Delete, "delete"),
         ],
         "nodes" => vec![
-            hint_line(
-                app,
-                &[
-                    (Action::Open, "pods"),
-                    (Action::Yaml, "yaml"),
-                    (Action::Describe, "describe"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::Cordon, "cordon"),
-                    (Action::Uncordon, "uncordon"),
-                    (Action::Drain, "drain"),
-                ],
-            ),
-            hint_line(app, &[(Action::Delete, "delete")]),
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
+            (Action::Cordon, "cordon"),
+            (Action::Uncordon, "uncordon"),
+            (Action::Drain, "drain"),
+            (Action::ProviderLogs, "cloud logs"),
+            (Action::Delete, "delete"),
         ],
         "certificatesigningrequests" => vec![
-            hint_line(
-                app,
-                &[
-                    (Action::Yaml, "yaml"),
-                    (Action::Describe, "describe"),
-                    (Action::Approve, "approve"),
-                ],
-            ),
-            hint_line(app, &[(Action::Deny, "deny"), (Action::Delete, "delete")]),
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
+            (Action::Approve, "approve"),
+            (Action::Deny, "deny"),
+            (Action::Delete, "delete"),
         ],
         "namespaces" => vec![
-            hint_line(
-                app,
-                &[
-                    (Action::Open, "switch to"),
-                    (Action::Yaml, "yaml"),
-                    (Action::Describe, "describe"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::Edit, "edit"),
-                    (Action::Delete, "delete"),
-                    (Action::NsResources, "resources"),
-                ],
-            ),
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
+            (Action::Edit, "edit"),
+            (Action::ProviderLogs, "cloud logs"),
+            (Action::Delete, "delete"),
+            (Action::NsResources, "resources"),
         ],
         "helm" => vec![
-            hint_line(app, &[(Action::Open, "history")]),
-            hint_line(
-                app,
-                &[(Action::Yaml, "yaml"), (Action::Describe, "describe")],
-            ),
-            hint_line(app, &[(Action::Delete, "uninstall")]),
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
+            (Action::Delete, "uninstall"),
         ],
         "helmhistory" => vec![
-            hint_line(
-                app,
-                &[
-                    (Action::Open, "values"),
-                    (Action::RestartOrRefresh, "rollback"),
-                ],
-            ),
-            hint_line(app, &[(Action::Delete, "uninstall")]),
+            (Action::RestartOrRefresh, "rollback"),
+            (Action::Delete, "uninstall"),
         ],
-        "rollouthistory" => vec![
-            hint_line(
-                app,
-                &[
-                    (Action::Open, "diff"),
-                    (Action::RestartOrRefresh, "rollback"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[(Action::Yaml, "yaml"), (Action::Describe, "describe")],
-            ),
+        crate::rollout::VIEW => vec![
+            (Action::Open, "diff"),
+            (Action::RestartOrRefresh, "rollback"),
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
         ],
         "customresourcedefinitions" => vec![
-            hint_line(
-                app,
-                &[
-                    (Action::Open, "resources"),
-                    (Action::Yaml, "yaml"),
-                    (Action::Describe, "describe"),
-                ],
-            ),
-            hint_line(app, &[(Action::Edit, "edit"), (Action::Delete, "delete")]),
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
+            (Action::Edit, "edit"),
+            (Action::Delete, "delete"),
         ],
         "secrets" => vec![
-            hint_line(
-                app,
-                &[
-                    (Action::Inspect, "decode"),
-                    (Action::Yaml, "yaml"),
-                    (Action::Describe, "describe"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::Edit, "edit"),
-                    (Action::Events, "events"),
-                    (Action::CopyName, "copy name"),
-                ],
-            ),
-            hint_line(app, &[(Action::Delete, "delete")]),
+            (Action::Inspect, "decode"),
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
+            (Action::Edit, "edit"),
+            (Action::Events, "events"),
+            (Action::CopyName, "copy name"),
+            (Action::Delete, "delete"),
         ],
         "persistentvolumeclaims" => vec![
-            hint_line(
-                app,
-                &[
-                    (Action::Inspect, "browse"),
-                    (Action::ShellOrScale, "shell"),
-                    (Action::Describe, "describe"),
-                ],
-            ),
-            hint_line(
-                app,
-                &[
-                    (Action::Yaml, "yaml"),
-                    (Action::Events, "events"),
-                    (Action::CopyName, "copy name"),
-                ],
-            ),
-            hint_line(app, &[(Action::Delete, "delete")]),
+            (Action::Inspect, "browse"),
+            (Action::ShellOrScale, "shell"),
+            (Action::Describe, "describe"),
+            (Action::Yaml, "yaml"),
+            (Action::Events, "events"),
+            (Action::CopyName, "copy name"),
+            (Action::Delete, "delete"),
         ],
         "applications" | "applicationsets"
             if app.argocd_kind() && app.configured_drill().is_none() =>
         {
             vec![
-                hint_line(
-                    app,
-                    &[
-                        (Action::Open, "argo view"),
-                        (Action::Yaml, "yaml"),
-                        (Action::Describe, "describe"),
-                    ],
-                ),
-                hint_line(
-                    app,
-                    &[
-                        (Action::Edit, "edit"),
-                        (Action::Events, "events"),
-                        (Action::CopyName, "copy name"),
-                    ],
-                ),
-                hint_line(app, &[(Action::Delete, "delete")]),
+                (Action::Open, "argo view"),
+                (Action::Yaml, "yaml"),
+                (Action::Describe, "describe"),
+                (Action::Edit, "edit"),
+                (Action::Events, "events"),
+                (Action::CopyName, "copy name"),
+                (Action::Delete, "delete"),
             ]
         }
         _ => {
-            // `⏎` follows a configured drill or node pointer before it opens
-            // the YAML, the order `App::drill` tries them in.
-            let open = match app.configured_drill() {
-                Some(drill) => drill.kind,
-                None if app.flux_operator_kind()
-                    && matches!(app.kind_plural.as_str(), "resourcesets" | "fluxinstances") =>
-                {
-                    "gitops".to_string()
-                }
-                None if app.node_pointer().is_some() => "node".to_string(),
-                None => "yaml".to_string(),
-            };
-            let mut first = vec![(Action::Open, open.as_str())];
-            if open != "yaml" {
-                first.push((Action::Yaml, "yaml"));
-            }
-            first.extend([(Action::Describe, "describe"), (Action::Events, "events")]);
-            vec![
-                hint_line(app, &first),
-                hint_line(
-                    app,
-                    &[
-                        (Action::Edit, "edit"),
-                        (Action::CopyName, "copy name"),
-                        (Action::CopyCell, "copy cell"),
-                    ],
-                ),
-                hint_line(app, &[(Action::Delete, "delete")]),
-            ]
+            let mut hints: Vec<(Action, &str)> = open
+                .iter()
+                .map(|open| (Action::Open, open.as_str()))
+                .collect();
+            hints.extend([
+                (Action::Yaml, "yaml"),
+                (Action::Describe, "describe"),
+                (Action::Events, "events"),
+                (Action::Edit, "edit"),
+                (Action::CopyName, "copy name"),
+                (Action::CopyCell, "copy cell"),
+                (Action::Delete, "delete"),
+            ]);
+            hints
         }
     };
     if app.kind_plural == "machinedeployments"
@@ -1322,15 +994,10 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
             .is_some_and(|k| k.ar.group == "cluster.x-k8s.io")
     {
         lines = vec![
-            hint_line(
-                app,
-                &[
-                    (Action::Open, "machines"),
-                    (Action::Yaml, "yaml"),
-                    (Action::Describe, "describe"),
-                ],
-            ),
-            hint_line(app, &[(Action::Edit, "edit"), (Action::Delete, "delete")]),
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
+            (Action::Edit, "edit"),
+            (Action::Delete, "delete"),
         ];
     }
     if app.kind.as_ref().is_some_and(|kind| kind.scalable)
@@ -1339,34 +1006,35 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
             "deployments" | "statefulsets" | "pods" | "persistentvolumeclaims"
         )
     {
-        lines.insert(1, hint_line(app, &[(Action::ShellOrScale, "scale")]));
+        lines.insert(lines.len().min(3), (Action::ShellOrScale, "scale"));
     }
     if app.flux_suspendable() {
-        lines.push(hint_line(app, &[(Action::ActionMenu, "flux menu")]));
+        lines.push((Action::ActionMenu, "flux menu"));
     }
     if app.argocd_kind() {
-        lines.push(hint_line(app, &[(Action::ActionMenu, "suspend/sync")]));
+        lines.push((Action::ActionMenu, "suspend/sync"));
     }
-    if app.kind_plural == "helmreleases" {
-        let mut pairs = vec![(Action::Open, "helm history")];
-        if app.flux_helmrelease_kind() {
-            pairs.push((Action::SetImage, "version"));
-        }
-        lines.push(hint_line(app, &pairs));
+    if app.flux_helmrelease_kind() {
+        lines.push((Action::SetImage, "version"));
     }
     if app.cronjob_kind() {
-        lines.push(hint_line(app, &[(Action::ActionMenu, "trigger/suspend")]));
+        lines.extend([
+            (Action::ActionMenu, "trigger/suspend"),
+            (Action::ProviderLogs, "cloud logs"),
+        ]);
     }
     if app.external_secret_kind() {
-        lines.push(hint_line(app, &[(Action::RestartOrRefresh, "force-sync")]));
+        lines.push((Action::RestartOrRefresh, "force-sync"));
     }
-    // The header box has 5 inner rows.
-    lines.truncate(5);
+    // Fill a 3-column grid so the columns stay aligned. The header has 5 inner rows.
     lines
+        .chunks(HEADER_HINT_COLUMNS.len())
+        .take(5)
+        .map(|row| hint_line(app, row))
+        .collect()
 }
 
 fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let show_ns = app.show_namespace_column();
     let headers = app.display_headers();
     let sort_col = app.sort_column;
@@ -1471,7 +1139,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
     if let Some(i) = sort_col {
         needed[i] = needed[i].max(cell_width(&headers[i]).saturating_add(2));
     }
-    let status_width = if app.kind_plural == "nodes" { 27 } else { 26 };
+    let status_cap = if app.kind_plural == "nodes" { 27 } else { 26 };
     // Reserve space for the "● " port-forward marker on the NAME column when
     // any live forward matches the current context+cluster.
     if !app.port_forwards.is_empty()
@@ -1513,9 +1181,10 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
                     "CPU" | "MEM" => ColWidth::Exact(8),
                     "%CPU" | "%MEM" => ColWidth::Exact(5),
                     "PODS" => ColWidth::Exact(5),
-                    // Keep status changes from moving the other columns. Nodes
-                    // need one extra cell for NotReady,SchedulingDisabled.
-                    "STATUS" => ColWidth::Exact(status_width),
+                    // Sized over the whole list, so scrolling never reflows it.
+                    // The cap fits CreateContainerConfigError, and Nodes need
+                    // one extra cell for NotReady,SchedulingDisabled.
+                    "STATUS" => ColWidth::Cap(status_cap),
                     "READY" | "RESTARTS" => ColWidth::Cap(10),
                     // CRD view: group domains run long (e.g.
                     // "kustomize.toolkit.fluxcd.io"), so GROUP/KIND/VERSIONS
@@ -1620,7 +1289,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
                 && (ready_idx
                     .and_then(|i| cells.get(i))
                     .is_some_and(|r| !all_ready(r.as_str()))
-                    || (app.kind_plural == "pods" && pod_readiness_blocked(obj)));
+                    || (app.kind_plural == "pods" && crate::columns::pod_readiness_blocked(obj)));
             let status_key = if running_not_ready {
                 "PodInitializing"
             } else {
@@ -1770,28 +1439,6 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
             selected_marked,
         },
         inner,
-    );
-    draw_border_scrollbar(
-        frame,
-        show_scrollbars,
-        Rect {
-            y: area.y.saturating_add(1),
-            height: area.height.saturating_sub(1),
-            ..area
-        },
-        offset,
-        count.saturating_sub(visible_rows),
-        visible_rows,
-        false,
-    );
-    draw_border_scrollbar(
-        frame,
-        show_scrollbars,
-        area,
-        col_offset,
-        app.col_scroll_max,
-        usize::from(inner.width),
-        true,
     );
 }
 
@@ -2036,30 +1683,6 @@ fn all_ready(ready: &str) -> bool {
     }
 }
 
-fn pod_readiness_blocked(obj: &kube::core::DynamicObject) -> bool {
-    let conditions = obj
-        .data
-        .pointer("/status/conditions")
-        .and_then(serde_json::Value::as_array);
-    let condition = |name: &str| {
-        conditions
-            .and_then(|conditions| conditions.iter().find(|c| c["type"].as_str() == Some(name)))
-    };
-    condition("Ready").is_some_and(|c| c["status"].as_str() != Some("True"))
-        || obj
-            .data
-            .pointer("/spec/readinessGates")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|gates| {
-                gates.iter().any(|gate| {
-                    gate["conditionType"]
-                        .as_str()
-                        .and_then(condition)
-                        .is_none_or(|c| c["status"].as_str() != Some("True"))
-                })
-            })
-}
-
 /// Render the NAME cell, highlighting characters that matched the active
 /// row filter (bold yellow) so a scan across many filtered results is
 /// faster — every visible row already matched, this just shows *where*.
@@ -2126,7 +1749,6 @@ fn push_match_spans(spans: &mut Vec<Span<'static>>, text: &str, matched: &[usize
 
 fn draw_scrollable(
     frame: &mut Frame,
-    show_scrollbars: bool,
     fullscreen: bool,
     view: &mut crate::app::Scrollable,
     area: Rect,
@@ -2136,6 +1758,8 @@ fn draw_scrollable(
     let inner_h = area.height.saturating_sub(if fullscreen { 1 } else { 2 }) as usize;
     view.set_viewport(inner_w, inner_h);
     let (start, end, row_offset) = view.visible_source_window();
+    let mut yaml = (view.syntax == crate::app::Syntax::Yaml)
+        .then(|| crate::yaml_syntax::state_at(&view.lines, start));
     let text: Vec<Line> = view
         .lines
         .iter()
@@ -2143,7 +1767,11 @@ fn draw_scrollable(
         .take(end - start)
         .map(|l| {
             let line = strip_ansi_if_present(l);
-            highlight_matches(Line::from(highlight_yaml(&line)), &view.filter)
+            let spans = match yaml.as_mut() {
+                Some(state) => crate::yaml_syntax::highlight(&line, state),
+                None => highlight_yaml(&line),
+            };
+            highlight_matches(Line::from(spans), &view.filter)
         })
         .collect();
     let text = if view.wrap {
@@ -2169,9 +1797,6 @@ fn draw_scrollable(
         p.scroll((0, view.hscroll.min(u16::MAX as usize) as u16))
     };
     frame.render_widget(p, area);
-    if !fullscreen {
-        draw_document_scrollbars(frame, show_scrollbars, view, area);
-    }
 }
 
 fn visible_wrapped_rows(
@@ -2199,7 +1824,6 @@ fn visible_wrapped_rows(
 /// not a full restyle; and the display-row offset is a `usize`, immune to the
 /// `u16` ceiling of `Paragraph::scroll`.
 fn draw_logs(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     // Fullscreen drops the borders (side glyphs would end up in every
     // terminal-selection copy); the title still takes the top row.
     let fullscreen = app.logs.fullscreen;
@@ -2378,17 +2002,6 @@ fn draw_logs(frame: &mut Frame, app: &mut App, area: Rect) {
             .title(Span::styled(title, theme::title()))
     };
     frame.render_widget(Paragraph::new(rows).block(block), area);
-    if !fullscreen {
-        draw_border_scrollbar(
-            frame,
-            show_scrollbars,
-            area,
-            scroll,
-            max_scroll,
-            inner_h,
-            false,
-        );
-    }
 }
 
 /// Display rows `raw` occupies when char-wrapped to `width` columns: ANSI
@@ -2987,13 +2600,7 @@ fn severity_color(severity: crate::logfilter::Severity) -> Color {
 }
 
 /// Unified-diff view with +/- line coloring.
-fn draw_diff(
-    frame: &mut Frame,
-    show_scrollbars: bool,
-    fullscreen: bool,
-    view: &mut crate::app::Scrollable,
-    area: Rect,
-) {
+fn draw_diff(frame: &mut Frame, fullscreen: bool, view: &mut crate::app::Scrollable, area: Rect) {
     let inner_w = area.width.saturating_sub(if fullscreen { 0 } else { 2 }) as usize;
     let inner_h = area.height.saturating_sub(if fullscreen { 1 } else { 2 }) as usize;
     view.set_viewport(inner_w, inner_h);
@@ -3035,9 +2642,6 @@ fn draw_diff(
         p.scroll((0, view.hscroll.min(u16::MAX as usize) as u16))
     };
     frame.render_widget(p, area);
-    if !fullscreen {
-        draw_document_scrollbars(frame, show_scrollbars, view, area);
-    }
 }
 
 /// Doc-view title, extended with the active search query and the current
@@ -3288,7 +2892,7 @@ fn build_help(app: &App, width: usize) -> (Vec<Line<'static>>, String, HelpSecti
         } else if action == Action::LogMarker {
             "add visual marker at the log tail (excluded from copy/save)"
         } else if action == Action::Fullscreen {
-            "toggle fullscreen for text selection (no borders or scrollbars)"
+            "toggle fullscreen for text selection (no borders)"
         } else if action == Action::Edit && scope == "detail" {
             "edit the displayed resource in $EDITOR (YAML, describe, decoded Secret)"
         } else if action == Action::Save && scope == "logs" {
@@ -3704,7 +3308,6 @@ pub(crate) fn refresh_help(app: &mut App) {
 }
 
 fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let width = usize::from(area.width.saturating_sub(2)).max(1);
     update_help_cache(app, width);
     let cache = app.help_cache.as_ref().expect("help content is ready");
@@ -3752,19 +3355,9 @@ fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
     {
         frame.render_widget(line, Rect::new(inner.x, inner.y + y as u16, inner.width, 1));
     }
-    draw_border_scrollbar(
-        frame,
-        show_scrollbars,
-        area,
-        usize::from(scroll),
-        usize::from(max_scroll),
-        usize::from(inner_h),
-        false,
-    );
 }
 
 fn draw_namespaces(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let names = app.filtered_namespaces();
     let browsing = app.ns_filter.is_empty();
     let shortcut = |n: &str| -> Option<String> {
@@ -3843,7 +3436,6 @@ fn draw_namespaces(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     app.picker_page_items = render_popup_list(
         frame,
-        show_scrollbars,
         area,
         (70, 60),
         items,
@@ -3853,7 +3445,6 @@ fn draw_namespaces(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_contexts(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let current = app.cluster.context.clone();
     let items: Vec<Text> = app
         .filtered_contexts()
@@ -3899,7 +3490,6 @@ fn draw_contexts(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     app.picker_page_items = render_popup_list(
         frame,
-        show_scrollbars,
         area,
         (50, 60),
         items,
@@ -3912,7 +3502,6 @@ fn draw_contexts(frame: &mut Frame, app: &mut App, area: Rect) {
 /// displayed columns in table order (so it doubles as a column reference).
 /// The active sort is marked with its direction arrow in the sorter color.
 fn draw_sort_picker(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let active = app.sort_column.and_then(|i| {
         app.display_headers()
             .get(i)
@@ -3943,7 +3532,6 @@ fn draw_sort_picker(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     app.picker_page_items = render_popup_list(
         frame,
-        show_scrollbars,
         area,
         (40, 60),
         items,
@@ -3956,7 +3544,6 @@ fn draw_sort_picker(frame: &mut Frame, app: &mut App, area: Rect) {
 /// its full value; ⏎ copies the value to the clipboard. Headers are padded
 /// to a common width so the values read as a column.
 fn draw_copy_picker(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let entries = app.filtered_copy_entries();
     let pad = entries
         .iter()
@@ -3980,7 +3567,6 @@ fn draw_copy_picker(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     app.picker_page_items = render_popup_list(
         frame,
-        show_scrollbars,
         area,
         (60, 60),
         items,
@@ -3993,7 +3579,6 @@ fn draw_copy_picker(frame: &mut Frame, app: &mut App, area: Rect) {
 /// menu rather than a single-key toggle, so acting on a live resource always
 /// takes an explicit, visible choice.
 fn draw_flux_menu(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let count = app.marked.len().max(1);
     let target = if count == 1 {
         "current selection".to_string()
@@ -4021,7 +3606,6 @@ fn draw_flux_menu(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     app.picker_page_items = render_popup_list(
         frame,
-        show_scrollbars,
         area,
         (36, 24),
         items,
@@ -4034,7 +3618,6 @@ fn draw_flux_menu(frame: &mut Frame, app: &mut App, area: Rect) {
 /// ports for single-select, plus a "Custom…" entry for manual input. A
 /// mapping whose local port was taken when the picker opened says `in use`.
 fn draw_port_forward_picker(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let target = app
         .pf_picker_target
         .as_ref()
@@ -4062,7 +3645,6 @@ fn draw_port_forward_picker(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     app.picker_page_items = render_popup_list(
         frame,
-        show_scrollbars,
         area,
         (40, 24),
         items,
@@ -4074,7 +3656,6 @@ fn draw_port_forward_picker(frame: &mut Frame, app: &mut App, area: Rect) {
 /// Pod file-transfer menu (`t` on a pod): download from or upload to the pod
 /// via `kubectl cp`, then two prompts for the source and destination paths.
 fn draw_transfer_menu(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let target = match &app.transfer_target {
         Some((_, pod, Some(c))) => format!("{pod}:{c}"),
         Some((_, pod, None)) => pod.clone(),
@@ -4093,7 +3674,6 @@ fn draw_transfer_menu(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     app.picker_page_items = render_popup_list(
         frame,
-        show_scrollbars,
         area,
         (36, 24),
         items,
@@ -4105,7 +3685,6 @@ fn draw_transfer_menu(frame: &mut Frame, app: &mut App, area: Rect) {
 /// Background port-forwards (`:pf`). A full-width view, not a popup — closing
 /// it (`esc`) does not stop the forwards; only `x`/`s` on a row does.
 fn draw_port_forwards(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     // Running forwards first, then the saved-but-stopped [[forwards]]
     // entries — one keystroke away instead of retyped.
     let mut items: Vec<ListItem> = app
@@ -4141,7 +3720,6 @@ fn draw_port_forwards(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = format!(" Port-forwards [{}] ", app.port_forwards.len());
     render_framed_list(
         frame,
-        show_scrollbars,
         area,
         items,
         Span::styled(title, theme::title()),
@@ -4151,7 +3729,6 @@ fn draw_port_forwards(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_dir(frame: &mut Frame, app: &mut App, area: Rect) {
     use crate::app::dir::DirEntryKind;
-    let show_scrollbars = app.scrollbars_visible();
     let name_w = app
         .dir
         .entries
@@ -4218,7 +3795,6 @@ fn draw_dir(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     render_framed_list(
         frame,
-        show_scrollbars,
         area,
         items,
         Span::styled(title, theme::title()),
@@ -4227,7 +3803,6 @@ fn draw_dir(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let items: Vec<ListItem> = app
         .find_items
         .iter()
@@ -4246,7 +3821,6 @@ fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = format!(" Find '{}' [{}] ", app.find_query, app.find_items.len());
     render_framed_list(
         frame,
-        show_scrollbars,
         area,
         items,
         Span::styled(title, theme::title()),
@@ -4255,7 +3829,6 @@ fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_adjacent(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let status = [
         app.child_status.clone(),
         app.adjacent_warning
@@ -4347,7 +3920,6 @@ fn draw_adjacent(frame: &mut Frame, app: &mut App, area: Rect) {
     );
     render_framed_list(
         frame,
-        show_scrollbars,
         area,
         items,
         Span::styled(title, theme::title()),
@@ -4356,7 +3928,6 @@ fn draw_adjacent(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_skins(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let items: Vec<Text> = app
         .skin_list
         .iter()
@@ -4369,7 +3940,6 @@ fn draw_skins(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     app.picker_page_items = render_popup_list(
         frame,
-        show_scrollbars,
         area,
         (42, 58),
         items,
@@ -4379,7 +3949,6 @@ fn draw_skins(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_snapshots(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let items: Vec<Text> = app
         .snapshot_list
         .iter()
@@ -4392,7 +3961,6 @@ fn draw_snapshots(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     app.picker_page_items = render_popup_list(
         frame,
-        show_scrollbars,
         area,
         (70, 70),
         items,
@@ -4566,7 +4134,6 @@ fn draw_containers(frame: &mut Frame, app: &mut App, area: Rect) {
     if area.width < 4 || area.height < 4 {
         return;
     }
-    let show_scrollbars = app.scrollbars_visible();
     let thresholds = app.resolved_thresholds();
     let qos = if app.container_qos.is_empty() {
         String::new()
@@ -4731,21 +4298,6 @@ fn draw_containers(frame: &mut Frame, app: &mut App, area: Rect) {
         .highlight_spacing(HighlightSpacing::Always);
     frame.render_stateful_widget(list, list_area, &mut app.container_state);
     app.picker_page_items = usize::from(list_area.height);
-    draw_border_scrollbar(
-        frame,
-        show_scrollbars,
-        Rect {
-            y: list_area.y.saturating_sub(1),
-            height: list_area.height.saturating_add(2),
-            ..popup
-        },
-        app.container_state.offset(),
-        app.container_list
-            .len()
-            .saturating_sub(usize::from(list_area.height)),
-        usize::from(list_area.height),
-        false,
-    );
     frame.render_widget(
         Paragraph::new(details).style(Style::default().fg(theme::text())),
         Rect {
@@ -4807,7 +4359,6 @@ fn draw_prompt_popup(frame: &mut Frame, app: &mut App, _area: Rect) {
 }
 
 fn draw_set_image(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let items: Vec<Text> = app
         .container_list
         .iter()
@@ -4823,7 +4374,6 @@ fn draw_set_image(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     app.picker_page_items = render_popup_list(
         frame,
-        show_scrollbars,
         area,
         (70, 60),
         items,
@@ -5099,15 +4649,6 @@ fn draw_text_popup(frame: &mut Frame, app: &mut App, input: bool) {
         body,
     );
     frame.render_widget(Paragraph::new(footer), controls);
-    draw_border_scrollbar(
-        frame,
-        app.scrollbars_visible(),
-        popup,
-        app.popup_scroll,
-        app.popup_max_scroll,
-        app.popup_viewport,
-        false,
-    );
 }
 
 fn draw_plugin_form(frame: &mut Frame, app: &App) {
@@ -5248,7 +4789,6 @@ fn draw_plugin_form(frame: &mut Frame, app: &App) {
 }
 
 fn draw_palette(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     if app.cmd_suggestions.is_empty() {
         return;
     }
@@ -5336,19 +4876,11 @@ fn draw_palette(frame: &mut Frame, app: &mut App, area: Rect) {
     clear_region(frame, rect);
     let mut state = ListState::default();
     state.select(Some(app.cmd_sel));
-    render_framed_list(
-        frame,
-        show_scrollbars,
-        rect,
-        items,
-        hint.style(theme::title()),
-        &mut state,
-    );
+    render_framed_list(frame, rect, items, hint.style(theme::title()), &mut state);
 }
 
 /// Xray hierarchical tree (owner → children → containers).
 fn draw_rbac(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     if app.rbac.pending {
         frame.render_widget(
             Paragraph::new("Reading RBAC data...").block(
@@ -5381,26 +4913,17 @@ fn draw_rbac(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         render_framed_list(
             frame,
-            show_scrollbars,
             areas[1],
             items,
             Span::styled(format!(" {} ", app.rbac.document.title), theme::title()),
             &mut app.rbac.selection,
         );
     } else {
-        draw_scrollable(
-            frame,
-            show_scrollbars,
-            false,
-            &mut app.rbac.document,
-            area,
-            theme::sky(),
-        );
+        draw_scrollable(frame, false, &mut app.rbac.document, area, theme::sky());
     }
 }
 
 fn draw_xray(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let glyph = |kind: &str| match kind {
         "deployment" => ("◈", theme::blue()),
         "replicaset" => ("◇", theme::sapphire()),
@@ -5435,7 +4958,6 @@ fn draw_xray(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = format!(" Xray [{}] ", app.xray_items.len());
     render_framed_list(
         frame,
-        show_scrollbars,
         area,
         items,
         Span::styled(title, theme::title()),
@@ -5444,7 +4966,6 @@ fn draw_xray(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_fleet(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     use crate::fleet::FleetStatus;
     let items: Vec<ListItem> = app
         .fleet_rows
@@ -5532,7 +5053,6 @@ fn draw_fleet(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = format!(" Fleet [{}] ", app.fleet_rows.len());
     render_framed_list(
         frame,
-        show_scrollbars,
         area,
         items,
         Span::styled(title, theme::title()),
@@ -5552,7 +5072,6 @@ fn draw_fleet(frame: &mut Frame, app: &mut App, area: Rect) {
 #[allow(clippy::too_many_arguments)]
 fn draw_findings(
     frame: &mut Frame,
-    show_scrollbars: bool,
     wrap: bool,
     scroll: &mut crate::app::FindingsScroll,
     area: Rect,
@@ -5637,20 +5156,16 @@ fn draw_findings(
         })
         .collect();
 
-    render_framed_list_rows(
+    render_framed_list(
         frame,
-        show_scrollbars,
         area,
         items,
         Span::styled(title, theme::title()),
         state,
-        &scroll.heights,
-        skip,
     );
 }
 
 fn draw_explain(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let title = if app.explain_items.is_empty() {
         format!(" {} ", app.explain_title)
     } else {
@@ -5662,7 +5177,6 @@ fn draw_explain(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     draw_findings(
         frame,
-        show_scrollbars,
         app.findings_wrap,
         &mut app.findings_scroll,
         area,
@@ -5675,7 +5189,6 @@ fn draw_explain(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_argocd(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     // The expansion is only discoverable from the title, the way the adjacent
     // view advertises the same key.
     let title = format!(" {} (c discover children) ", app.argocd_title);
@@ -5684,7 +5197,6 @@ fn draw_argocd(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     draw_findings(
         frame,
-        show_scrollbars,
         app.findings_wrap,
         &mut app.findings_scroll,
         area,
@@ -5697,11 +5209,9 @@ fn draw_argocd(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_gitops(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     let title = format!(" {} ", app.gitops_title);
     draw_findings(
         frame,
-        show_scrollbars,
         app.findings_wrap,
         &mut app.findings_scroll,
         area,
@@ -5930,7 +5440,6 @@ fn clip_to_width(s: &str, max: usize) -> String {
 /// Session-local timeline: the state changes observed for one object while
 /// sofka has been watching, oldest first.
 fn draw_timeline(frame: &mut Frame, app: &mut App, area: Rect) {
-    let show_scrollbars = app.scrollbars_visible();
     use crate::timeline::Level;
     let color = |level: Level| match level {
         Level::Info => theme::text(),
@@ -5966,7 +5475,6 @@ fn draw_timeline(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = format!(" {target} — timeline  ({count} events · session-local) ");
     render_framed_list(
         frame,
-        show_scrollbars,
         area,
         items,
         Span::styled(title, theme::title()),
@@ -6089,160 +5597,6 @@ fn counts_tile(frame: &mut Frame, area: Rect, p: &crate::store::Pulse) {
     );
 }
 
-fn navigation_hint(app: &App, width: u16) -> Line<'static> {
-    let scope = app.key_scope();
-    if scope == "table" {
-        let cycle = [
-            Span::styled(
-                app.keymap.first_label(scope, Action::NextView).to_string(),
-                hint_key_style(),
-            ),
-            Span::raw("/"),
-            Span::styled(
-                app.keymap
-                    .first_label(scope, Action::PreviousView)
-                    .to_string(),
-                hint_key_style(),
-            ),
-            Span::raw(if app.active_workspace.is_some() {
-                ": workspace  "
-            } else {
-                ": resources  "
-            }),
-        ];
-        let mut actions = vec![
-            (Action::Command, "command"),
-            (Action::Help, "help"),
-            (Action::Filter, "filter"),
-        ];
-        if app.hide_header || !header_hints_fit(width) {
-            actions.extend([
-                (Action::Yaml, "yaml"),
-                (Action::Describe, "describe"),
-                (Action::Logs, "logs"),
-                (Action::Edit, "edit"),
-                (Action::ShellOrScale, "shell/scale"),
-                (Action::Delete, "delete"),
-            ]);
-        }
-        actions.extend([
-            (Action::Sort, "sort"),
-            (Action::Mark, "mark"),
-            (Action::Back, "back"),
-        ]);
-        let mut hint = key_hint(app, scope, &actions);
-        hint.spans.splice(0..0, cycle);
-        return hint;
-    }
-    if scope == "port_forward_picker" {
-        return key_hint(
-            app,
-            scope,
-            &[
-                (Action::Accept, "start"),
-                (Action::Edit, "edit local port"),
-                (Action::Back, "back"),
-            ],
-        );
-    }
-    let preferred = match scope {
-        "logs" => &[
-            Action::Back,
-            Action::Filter,
-            Action::Follow,
-            Action::LogMarker,
-            Action::LogWarnings,
-            Action::Json,
-            Action::Wrap,
-            Action::Stream,
-            Action::Copy,
-            Action::Save,
-            Action::PageUp,
-            Action::PageDown,
-        ][..],
-        "diff" if app.dir.preview.is_some() => &[
-            Action::Apply,
-            Action::Back,
-            Action::Filter,
-            Action::NextMatch,
-            Action::PreviousMatch,
-            Action::Wrap,
-            Action::Copy,
-            Action::PageUp,
-            Action::PageDown,
-        ][..],
-        "detail" | "diff" | "events" => &[
-            Action::Back,
-            Action::Filter,
-            Action::NextMatch,
-            Action::PreviousMatch,
-            Action::Wrap,
-            Action::Fullscreen,
-            Action::Copy,
-            Action::Save,
-            Action::PageUp,
-            Action::PageDown,
-        ][..],
-        "dir" => &[
-            Action::Back,
-            Action::Accept,
-            Action::Parent,
-            Action::Edit,
-            Action::Apply,
-            Action::Delete,
-            Action::Refresh,
-        ][..],
-        "pvc_explore" => &[
-            Action::Back,
-            Action::SwitchPane,
-            Action::Accept,
-            Action::Parent,
-            Action::Copy,
-            Action::Shell,
-            Action::Refresh,
-        ][..],
-        "port_forwards" => &[
-            Action::Back,
-            Action::Up,
-            Action::Down,
-            Action::Start,
-            Action::Toggle,
-        ][..],
-        "contexts" => &[
-            Action::Back,
-            Action::Accept,
-            Action::Rename,
-            Action::FleetMark,
-        ][..],
-        _ => &[
-            Action::Back,
-            Action::Up,
-            Action::Down,
-            Action::Accept,
-            Action::Logs,
-            Action::Refresh,
-            Action::Filter,
-            Action::Delete,
-            Action::Help,
-        ][..],
-    };
-    let editable = scope == "detail" && app.document_editable() && !app.readonly;
-    let available: Vec<_> = preferred
-        .iter()
-        .flat_map(|&action| {
-            let edit = (editable && action == Action::Back).then_some(Action::Edit);
-            std::iter::once(action).chain(edit)
-        })
-        .filter(|&action| {
-            app.keymap
-                .entries()
-                .any(|(s, a, _)| s == scope && a == action)
-        })
-        .map(|action| (action, action.description()))
-        .collect();
-    key_hint(app, scope, &available)
-}
-
 fn draw_prompt(frame: &mut Frame, app: &App, area: Rect) {
     let line = match app.mode {
         Mode::Command => Line::from(vec![
@@ -6314,9 +5668,7 @@ fn draw_prompt(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled("█", Style::default().fg(theme::teal())),
             ])
         }
-        Mode::Confirm => confirm_action_hint(app, app.confirm_allows_force_toggle())
-            .style(Style::default().fg(theme::yellow())),
-        _ => navigation_hint(app, frame.area().width).style(theme::dim()),
+        _ => return,
     };
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -6329,74 +5681,20 @@ fn polling_label() -> String {
     )
 }
 
-/// Status indicator for views without an active resource refresh source.
-/// Document content is static; table data follows the watch, or the list
-/// poll that replaced it.
-fn sync_indicator(
-    mode: Mode,
-    doc_filter_return: Mode,
-    synced: bool,
-    polling: bool,
-) -> (&'static str, Color) {
-    let static_doc = match mode {
-        Mode::Detail | Mode::Diff | Mode::Explain => true,
-        // A directory listing is fetched once by exec, not watched — `r`
-        // re-reads it. Calling it live would be a lie.
-        Mode::PvcExplore | Mode::Dir => true,
-        // `/` search over one of those documents — same underlying snapshot.
-        Mode::DocFilter => matches!(doc_filter_return, Mode::Detail | Mode::Diff),
-        _ => false,
-    };
-    if static_doc {
-        ("○ static", theme::overlay1())
-    } else if synced && polling {
-        ("● polling", theme::yellow())
-    } else if synced {
-        ("● live", theme::green())
-    } else {
-        ("○ syncing", theme::yellow())
-    }
-}
-
-fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
+fn flash_line(app: &App, indent: &str) -> Line<'static> {
     let style = if app.flash_err {
         Style::default().fg(theme::red())
     } else {
         Style::default().fg(theme::subtext0())
     };
-    let (synced, sync_color) = if app.refresh_task.is_some() {
-        ("● refresh", theme::sky())
-    } else if app.resource_refresh_available() {
-        ("○ stopped", theme::overlay1())
-    } else if app.ns_resources_active() && app.mode == Mode::Table && app.store.synced {
-        ("○ snapshot", theme::overlay1())
-    } else {
-        sync_indicator(
-            app.mode,
-            app.doc_filter_return,
-            app.store.synced,
-            app.watch_polling,
-        )
-    };
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(10), Constraint::Length(12)])
-        .split(area);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(" {}", diagnostic_value(app, &app.flash)),
-            style,
-        ))),
-        cols[0],
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            synced,
-            Style::default().fg(sync_color),
-        )))
-        .alignment(Alignment::Right),
-        cols[1],
-    );
+    Line::from(Span::styled(
+        format!("{indent}{}", diagnostic_value(app, &app.flash)),
+        style,
+    ))
+}
+
+fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
+    frame.render_widget(Paragraph::new(flash_line(app, " ")), area);
 }
 
 fn confirm_action_hint(app: &App, allows_force: bool) -> Line<'static> {
@@ -6408,79 +5706,6 @@ fn confirm_action_hint(app: &App, allows_force: bool) -> Line<'static> {
         ]);
     }
     key_hint(app, "confirm", &actions)
-}
-
-fn draw_border_scrollbar(
-    frame: &mut Frame,
-    show_scrollbars: bool,
-    area: Rect,
-    position: usize,
-    max_offset: usize,
-    visible: usize,
-    horizontal: bool,
-) {
-    if !show_scrollbars || max_offset == 0 || visible == 0 || area.width < 3 || area.height < 3 {
-        return;
-    }
-    let (orientation, track) = if horizontal {
-        (
-            ScrollbarOrientation::HorizontalBottom,
-            Rect::new(area.x + 1, area.bottom() - 1, area.width - 2, 1),
-        )
-    } else {
-        (
-            ScrollbarOrientation::VerticalRight,
-            Rect::new(area.right() - 1, area.y + 1, 1, area.height - 2),
-        )
-    };
-    let track = track.intersection(frame.area());
-    if track.is_empty() {
-        return;
-    }
-    // Ratatui uses content_length - 1 as the maximum position, then adds
-    // the viewport length to calculate the thumb size.
-    let mut state = ScrollbarState::new(max_offset.saturating_add(1))
-        .position(position.min(max_offset))
-        .viewport_content_length(visible);
-    let scrollbar = Scrollbar::new(orientation)
-        .thumb_symbol(if horizontal { "─" } else { "│" })
-        .track_symbol(Some(if horizontal { "─" } else { "│" }))
-        .begin_symbol(None)
-        .end_symbol(None)
-        .thumb_style(Style::default().fg(theme::text()))
-        .track_style(theme::dim());
-    frame.render_stateful_widget(scrollbar, track, &mut state);
-}
-
-fn draw_document_scrollbars(
-    frame: &mut Frame,
-    show_scrollbars: bool,
-    view: &crate::app::Scrollable,
-    area: Rect,
-) {
-    let (rows, widest) = view.scroll_dimensions();
-    let height = usize::from(area.height.saturating_sub(2));
-    let width = usize::from(area.width.saturating_sub(2));
-    draw_border_scrollbar(
-        frame,
-        show_scrollbars,
-        area,
-        view.scroll,
-        rows.saturating_sub(height),
-        height,
-        false,
-    );
-    if !view.wrap && (widest > width || view.hscroll > 0) {
-        draw_border_scrollbar(
-            frame,
-            show_scrollbars,
-            area,
-            view.hscroll,
-            widest.saturating_sub(1),
-            width,
-            true,
-        );
-    }
 }
 
 /// Clear a popup region before drawing on top of it. `Clear` resets the cells
@@ -6511,7 +5736,6 @@ fn wrap_popup_items<'a>(items: &[Text<'a>], width: u16) -> Vec<ListItem<'a>> {
 
 fn render_popup_list<'a, T>(
     frame: &mut Frame,
-    show_scrollbars: bool,
     area: Rect,
     percent: (u16, u16),
     items: Vec<Text<'a>>,
@@ -6583,25 +5807,10 @@ where
             .highlight_symbol("▌ ")
             .highlight_spacing(HighlightSpacing::Always);
         frame.render_stateful_widget(list, list_area, state);
-        let visible = usize::from(list_area.height);
-        let page = visible_items(&heights, state.offset(), visible);
-        draw_border_scrollbar(
-            frame,
-            show_scrollbars,
-            Rect {
-                y: popup.y + height,
-                height: popup.height.saturating_sub(height),
-                ..popup
-            },
-            heights.iter().take(state.offset()).sum(),
-            heights.iter().sum::<usize>().saturating_sub(visible),
-            visible,
-            false,
-        );
-        page
+        visible_items(&heights, state.offset(), usize::from(list_area.height))
     } else {
         let heights: Vec<_> = wrapped.iter().map(ListItem::height).collect();
-        render_framed_list(frame, show_scrollbars, popup, wrapped, title, state);
+        render_framed_list(frame, popup, wrapped, title, state);
         visible_items(
             &heights,
             state.offset(),
@@ -6627,7 +5836,6 @@ fn visible_items(heights: &[usize], offset: usize, rows: usize) -> usize {
 
 fn render_framed_list<'a, T>(
     frame: &mut Frame,
-    show_scrollbars: bool,
     area: Rect,
     items: Vec<ListItem<'a>>,
     title: T,
@@ -6635,37 +5843,6 @@ fn render_framed_list<'a, T>(
 ) where
     T: Into<Line<'a>>,
 {
-    let heights: Vec<_> = items.iter().map(ListItem::height).collect();
-    render_framed_list_rows(
-        frame,
-        show_scrollbars,
-        area,
-        items,
-        title,
-        state,
-        &heights,
-        0,
-    );
-}
-
-/// [`render_framed_list`] with the scrollbar measured from `heights`, the full
-/// row count of each item, plus `skip` rows already scrolled inside the item at
-/// the top. A findings view shortens a tall finding to the rows on screen, so
-/// the items alone would hide how much of it is left.
-#[allow(clippy::too_many_arguments)]
-fn render_framed_list_rows<'a, T>(
-    frame: &mut Frame,
-    show_scrollbars: bool,
-    area: Rect,
-    items: Vec<ListItem<'a>>,
-    title: T,
-    state: &mut ListState,
-    heights: &[usize],
-    skip: usize,
-) where
-    T: Into<Line<'a>>,
-{
-    let total: usize = heights.iter().sum();
     let list = List::new(items)
         .highlight_style(theme::selected_row())
         .highlight_symbol("▌ ")
@@ -6678,17 +5855,6 @@ fn render_framed_list_rows<'a, T>(
                 .title(title.into()),
         );
     frame.render_stateful_widget(list, area, state);
-    let visible = usize::from(area.height.saturating_sub(2));
-    let position = heights.iter().take(state.offset()).sum::<usize>() + skip;
-    draw_border_scrollbar(
-        frame,
-        show_scrollbars,
-        area,
-        position,
-        total.saturating_sub(visible),
-        visible,
-        false,
-    );
 }
 
 /// Center a fixed-size rectangle within `r`, clamped to `r`'s bounds. Used by
@@ -6865,9 +6031,6 @@ mod tests {
                 }
                 _ => terminal.backend_mut().resize(60, 30),
             }
-            // The scrollbar hides on a timer; a slow run must not let it
-            // vanish between the cached and the fresh draw.
-            app.scrollbar_activity = None;
             let previous_key = app.help_cache.as_ref().unwrap().key;
             terminal.draw(|f| draw(f, &mut app)).unwrap();
             let width = usize::from(terminal.backend().buffer().area.width.saturating_sub(2));
@@ -6944,69 +6107,90 @@ mod tests {
 
     /// A describe/YAML/diff document is a snapshot — the status bar must not
     /// claim it's live (#175 follow-up report from Discord).
-    #[test]
-    fn sync_indicator_labels_static_documents() {
+    /// The header has no box and no title (k9s-style): content starts on row 0,
+    /// inset one column, the flash takes the fifth row, and the table fills the rest.
+    #[tokio::test]
+    async fn header_is_borderless_and_untitled() {
+        use crate::k8s::Cluster;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let mut cluster = Cluster::fake();
+        cluster.server_version = "v1.36.2-eks-bca9cf6".into();
+        let mut app = App::new(cluster, tx);
+        app.flash = "flash message".into();
+        let mut term = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        term.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = term.backend().buffer();
+        let rows: Vec<String> = (0..5)
+            .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+
+        assert!(rows[0].starts_with(" Context:"), "{:?}", rows[0]);
+        assert!(rows[1].starts_with(" Namespace:"), "{:?}", rows[1]);
+        assert!(rows[3].starts_with(" Count:"), "{:?}", rows[3]);
         assert_eq!(
-            sync_indicator(Mode::Table, Mode::Detail, true, false).0,
-            "● live"
+            rows[4].trim_end(),
+            " flash message",
+            "the flash sits below Count:"
         );
-        assert_eq!(
-            sync_indicator(Mode::Table, Mode::Detail, false, false).0,
-            "○ syncing"
+        let table_top: String = (0..120).map(|x| buffer[(x, 5)].symbol()).collect();
+        assert!(table_top.contains('╭'), "{table_top:?}");
+        let last: String = (0..120).map(|x| buffer[(x, 19)].symbol()).collect();
+        assert!(
+            last.contains('╰'),
+            "the table reaches the last row: {last:?}"
         );
-        assert_eq!(
-            sync_indicator(Mode::Detail, Mode::Detail, true, false).0,
-            "○ static"
-        );
-        assert_eq!(
-            sync_indicator(Mode::Diff, Mode::Detail, true, false).0,
-            "○ static"
-        );
-        // `/` search inside a document keeps the static label…
-        assert_eq!(
-            sync_indicator(Mode::DocFilter, Mode::Detail, true, false).0,
-            "○ static"
-        );
-        // …but searching help (not resource data) doesn't.
-        assert_eq!(
-            sync_indicator(Mode::DocFilter, Mode::Help, true, false).0,
-            "● live"
-        );
-        // Events are watch-backed, genuinely live.
-        assert_eq!(
-            sync_indicator(Mode::Events, Mode::Detail, true, false).0,
-            "● live"
-        );
-        // A view RBAC only lets list is current to the last poll, not live.
-        assert_eq!(
-            sync_indicator(Mode::Table, Mode::Detail, true, true).0,
-            "● polling"
-        );
-        assert_eq!(
-            sync_indicator(Mode::Table, Mode::Detail, false, true).0,
-            "○ syncing"
-        );
-        assert_eq!(
-            sync_indicator(Mode::Detail, Mode::Detail, true, true).0,
-            "○ static"
-        );
+        for text in ["sofka", "v1.36.2", "Cluster:"] {
+            assert!(!rows.iter().any(|r| r.contains(text)), "{text}: {rows:?}");
+        }
+        for r in &rows {
+            assert!(
+                !r.chars().any(|c| "╭╮╰╯│─".contains(c)),
+                "no border glyphs in the header: {r:?}"
+            );
+        }
     }
 
-    #[test]
-    fn header_title_shows_connected_kubernetes_revision() {
-        assert_eq!(line_text(&header_title("", None)), " sofka ");
-        assert_eq!(
-            line_text(&header_title("v1.36.2-eks-bca9cf6", None)),
-            " sofka · K8s Rev: v1.36.2-eks-bca9cf6 "
-        );
+    /// The compact header (`ctrl-e`) has no app name either, so the kind starts the line.
+    #[tokio::test]
+    async fn compact_header_is_untitled() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let mut app = App::new(crate::k8s::Cluster::fake(), tx);
+        app.switch_kind("pods");
+        // The welcome flash names sofka, so it would hide a title that came back.
+        app.flash.clear();
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert!(app.compact);
+        let mut term = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        term.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = term.backend().buffer();
+        let top: String = (0..120).map(|x| buffer[(x, 0)].symbol()).collect();
+        assert!(!top.contains("sofka"), "{top:?}");
+        assert!(top.starts_with(" pods ["), "{top:?}");
     }
 
-    #[test]
-    fn header_title_shows_an_available_update() {
-        assert_eq!(
-            line_text(&header_title("v1.36.2", Some("0.32.0"))),
-            " sofka · K8s Rev: v1.36.2 · v0.32.0 available "
-        );
+    #[tokio::test]
+    async fn header_shows_an_available_update_on_the_context_row() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let mut app = App::new(crate::k8s::Cluster::fake(), tx);
+        app.latest_release = Some(crate::update::Release {
+            version: "999.0.0".into(),
+            url: "https://github.com/nklmilojevic/sofka/releases/tag/v999.0.0".into(),
+        });
+        let mut term = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        term.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = term.backend().buffer();
+        let context: String = (0..120).map(|x| buffer[(x, 0)].symbol()).collect();
+        assert!(context.starts_with(" Context:"), "{context:?}");
+        assert!(context.contains("v999.0.0 available"), "{context:?}");
     }
 
     /// Deficit: a Flex column whose content fits inside its weight-share takes
@@ -7688,7 +6872,7 @@ mod tests {
                 .collect::<Vec<String>>()
         };
 
-        // Bordered by default: the pane sits under the 7-line header.
+        // Bordered by default: the pane sits under the 5-line header.
         let normal = render(&mut app);
         assert!(
             normal.iter().any(|r| r.contains('╭')),

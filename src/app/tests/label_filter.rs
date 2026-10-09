@@ -116,7 +116,7 @@ async fn label_filter_keeps_boundaries_and_combines_local_terms() {
         ("label:cd label:gh", &["alpha"]),
         (
             "(label:cd || label:worker) && !label:canary",
-            &["alpha", "beta"],
+            &["beta", "alpha"],
         ),
         ("label:cd status=Running", &["alpha"]),
         ("!(label:cd || label:worker)", &["gamma"]),

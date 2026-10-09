@@ -5,7 +5,7 @@ const MAX_RECENT_NAMESPACES: usize = 8;
 
 /// The sort picker's pinned first entry: clears the sort back to the default
 /// (namespace, name) ordering.
-pub const DEFAULT_SORT_LABEL: &str = "default (ns/name)";
+pub const DEFAULT_SORT_LABEL: &str = "ns/name";
 
 impl App {
     /// Open the switcher on the active namespace, then fetch the namespace list.
@@ -330,16 +330,8 @@ impl App {
         self.sort_picker_state.select(Some(idx));
     }
 
-    pub(super) fn sort_by_age(&mut self) {
-        if !self.display_headers().iter().any(|h| h == "AGE") {
-            self.flash_warn("view has no AGE column");
-            return;
-        }
-        self.apply_sort_choice("AGE");
-    }
-
     /// Sort by a picked entry: the default entry clears the sort, a new column
-    /// sorts ascending, and re-picking the active column toggles direction
+    /// sorts high to low, and re-picking the active column toggles direction
     /// (the spreadsheet idiom).
     fn apply_sort_choice(&mut self, entry: &str) {
         self.mode = Mode::Table;
@@ -355,7 +347,7 @@ impl App {
         let Some(idx) = self.display_headers().iter().position(|h| h == entry) else {
             return;
         };
-        self.sort_desc = self.sort_column == Some(idx) && !self.sort_desc;
+        self.sort_desc = self.sort_column != Some(idx) || !self.sort_desc;
         self.sort_column = Some(idx);
         self.invalidate_rows();
         self.remember_sort();
