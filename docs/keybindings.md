@@ -100,7 +100,7 @@ Built-in bindings keep their current priority over bookmarks, workspaces, and
 plugins. A released key becomes available to them. `:config` reports keys hidden
 by a built-in action when that action is available. Kind-specific table actions
 only claim their key on the kinds they act on: `cordon`, `uncordon`, and `drain`
-on nodes, `approve` and `deny` on CertificateSigningRequests, `attach` and `previous_logs` on pods, `set_image` on pods and workload
+on nodes, `approve` and `deny` on CertificateSigningRequests, `attach`, `previous_logs`, and `toggle_completed` on pods, `set_image` on pods and workload
 controllers, `rollout_history` on Deployments, StatefulSets, and DaemonSets,
 `inspect` on secrets and PVCs, and `ns_resources` on namespaces. On other kinds, bookmarks,
 workspaces, and matching plugins get the key first. Bookmarks, workspaces, and
@@ -681,6 +681,7 @@ for those operations.
 | `shell_or_scale`     | `s`                  |
 | `sort`               | `S`                  |
 | `timeline`           | `T`                  |
+| `toggle_completed`   | `h`                  |
 | `toggle_owned`       | `O`                  |
 | `uncordon`           | `U`                  |
 | `up`                 | `k`, `up`            |

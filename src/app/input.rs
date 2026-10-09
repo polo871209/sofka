@@ -368,6 +368,7 @@ impl App {
                 self.toggle_workloads_owned();
             }
             (Some(Action::NsResources), _) => self.open_ns_resources_for_row(),
+            (Some(Action::ToggleCompleted), _) => self.toggle_completed(),
             (Some(Action::Filter), _) => self.mode = Mode::Filter,
             (Some(Action::Exit), _) => self.should_quit = true,
             (Some(Action::Back), _) => {
