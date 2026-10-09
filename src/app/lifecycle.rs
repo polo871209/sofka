@@ -453,6 +453,10 @@ impl App {
         // for the session diff (`:diff` on objects with no
         // last-applied annotation).
         let prev = self.store.latest_in(partition, &key);
+        let completion_changed = self.completed_hidden()
+            && prev.is_some_and(|prev| {
+                super::rows::pod_succeeded(prev) != super::rows::pod_succeeded(&obj)
+            });
         let kind = self.watched_plural(&key).to_string();
         self.timeline
             .observe_as(&self.kind_plural, &kind, &key, prev.map(Arc::as_ref), &obj);
@@ -473,6 +477,7 @@ impl App {
         }
         match self.store.apply_in(partition, key.clone(), obj) {
             StoreMutation::Inserted => self.invalidate_row(&key),
+            StoreMutation::Updated if completion_changed => self.invalidate_row(&key),
             StoreMutation::Updated => self.invalidate_row_contents(&key),
             StoreMutation::Buffered | StoreMutation::Removed | StoreMutation::Unchanged => {}
         }
