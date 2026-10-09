@@ -262,6 +262,7 @@ impl App {
         let yaml = serde_yaml::to_string(&rel.config).unwrap_or_else(|e| format!("# error: {e}"));
         self.detail = Scrollable {
             wrap: self.detail.wrap,
+            syntax: super::Syntax::Yaml,
             title: format!("{} v{} — values", rel.name, rel.revision),
             lines: yaml.lines().map(String::from).collect(),
             ..Default::default()

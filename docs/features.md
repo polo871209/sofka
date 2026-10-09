@@ -167,16 +167,9 @@ include those conditions. Row filters can search the route paths.
   column, scaled to allocatable. They are opt-in through `[views]`. See
   [Views](views.md#built-in-and-metric-columns).
 
-- **Scroll position** appears on the borders of long resource tables, document
-  views, logs, and pickers. Tables and unwrapped documents also show horizontal
-  position. Wrapped views use display rows. Scrollbars use thin lines. They
-  appear during keyboard or mouse scrolling and hide after 700 ms without
-  scrolling. They stay hidden when content fits. Fullscreen logs and documents
-  keep their borderless layout for text selection.
-
 - **Fullscreen documents** - `F` toggles the full terminal area for YAML, decoded
-  Secret, describe, diff, events, and plugin popup output. Borders, scrollbars,
-  the application header, status line, and key hints are hidden. The title and
+  Secret, describe, diff, events, and plugin popup output. Borders, the
+  application header, status line, and key hints are hidden. The title and
   active search or command prompt remain visible. Search, scrolling, wrapping,
   copying, and refresh still work. The document setting is kept for the current
   session, including new documents, and is separate from the Logs setting.
@@ -190,11 +183,11 @@ include those conditions. Row filters can search the route paths.
   `terminal_title = false` to disable title changes. Sofka clears the title on exit.
 
 - **Compact startup** - set `compact_mode = true` to start with a one-line
-  header and no footer. `Ctrl-E` toggles the layout for the session; reloads and
+  header. `Ctrl-E` toggles the layout for the session; reloads and
   context switches preserve it.
 
 - **Optional header** - set `hide_header = true` in the configuration to hide
-  the header and logo, including the one-line header in compact mode.
+  the header, including the one-line header in compact mode.
 
 - **Connect** to the current kubeconfig context, including exec credential
   plugins (GKE, EKS, and friends).
@@ -267,9 +260,8 @@ include those conditions. Row filters can search the route paths.
   statefulsets, daemonsets, services, nodes, namespaces, configmaps, secrets,
   jobs, cronjobs, PVC/PV, ingresses, endpoints, CustomResourceDefinitions,
   Flux and flux-operator objects), with
-  a NAME/AGE fallback for everything else. STATUS columns use a fixed width of
-  26 characters, or 27 for Nodes, so status changes do not move adjacent
-  columns. A configured column width takes priority. Column widths use the full filtered list so
+  a NAME/AGE fallback for everything else. STATUS columns fit the longest status
+  in the list, up to 26 characters, or 27 for Nodes. A configured column width takes priority. Column widths use the full filtered list so
   vertical scrolling does not move the columns. Node ROLES combines
   `node-role.kubernetes.io/` labels with the legacy `kubernetes.io/role` value
   and removes duplicate roles. Node STATUS adds `SchedulingDisabled` when
@@ -424,9 +416,10 @@ include those conditions. Row filters can search the route paths.
 - **Selected namespace** (`W`) switches to the cursor row's namespace and
   keeps the resource kind. It uses normal namespace history and watch behavior.
   Rows without a namespace show a status message.
-- **Sort by age** (`A`) selects `AGE` with the same direction as the sort picker.
-  Press it again to invert. If `AGE` is absent, the current sort stays active.
-- **Default sort** - `[views."*"].sort` sets a global initial sort, with
+- **Sort picker** (`S`) sorts a newly picked column high to low (descending).
+  Pick the active column again, or press `I`, to invert.
+- **Default sort** - tables open sorted by status, failures first.
+  `[views."*"].sort` sets a global initial sort, with
   resource-specific overrides. Sort choices are saved per kind by default.
   Set `remember_sort = false` to make user sort changes temporary.
 - **Configurable key bindings** - change or disable built-in keyboard actions
@@ -453,14 +446,13 @@ include those conditions. Row filters can search the route paths.
   off, drag to select text. This command does not change the configuration file.
   sofka also releases the mouse while a suspended command (`kubectl exec`,
   `$EDITOR`) runs.
-- **Compact mode** (`ctrl-e`) - collapse the seven-line header and the footer
-  into one info line (kind · count · namespace · context, with a flash and the
-  live indicator), so a tiled pane is almost all table.
+- **Compact mode** (`ctrl-e`) - collapse the five-line header
+  into one info line (kind · count · namespace · context, with a flash), so a tiled pane is almost all table.
 
 ## Metrics and health
 
 - **Live CPU and MEM columns** for pods and nodes from the metrics API, colored
-  on unusual values. Nodes also get **%CPU and %MEM of allocatable**
+  on unusual values. Pods also get **%CPU/R and %MEM/R**, usage as a percentage of the request, and the pod table reads READY, STATUS, %CPU/R, CPU, %MEM/R, MEM, RESTARTS, AGE. Nodes also get **%CPU and %MEM of allocatable**
   (`status.allocatable` - the pool the scheduler hands out), colored by the
   `utilization` thresholds and sortable, so "which node is full" is one glance
   and one `S`. **%CPU/R and %MEM/R** show how much of allocatable the pods on
@@ -715,8 +707,8 @@ include those conditions. Row filters can search the route paths.
   DaemonSets after confirmation. With no marked rows, restart the current row.
   Guardrails apply to the full target set. A failed request does not stop requests
   for the other targets. The final error report retains all failed targets.
-- **Rollout history and rollback** (`:rollout-history`) - list the revisions of
-  the selected Deployment, StatefulSet, or DaemonSet, newest first, like
+- **Rollout history and rollback** (`:rollout-history`, or `ctrl-u` on a
+  workload) - list the revisions of the selected Deployment, StatefulSet, or DaemonSet, newest first, like
   `kubectl rollout history`. Deployment revisions come from their ReplicaSets,
   StatefulSet and DaemonSet revisions from their ControllerRevisions. Only
   revisions whose owner reference carries the workload's UID are listed, and
@@ -867,9 +859,7 @@ scroll position where possible, and the selected Explain resource when findings
 move or its status text changes. Findings without a resource target match by
 content. If the selected finding disappears, the selection clears. Select another
 finding before opening its resource, events, or logs.
-A shorter document can reduce the scroll position. The status indicator shows
-`refresh` while automatic refresh is on and `stopped` when it is off. Documents
-without refresh support, such as saved snapshots and Helm manifests, show `static`.
+A shorter document can reduce the scroll position.
 
 Automatic refresh stops when you leave the view, open help or the command
 palette, or a request fails. Document search keeps refresh active. A failed

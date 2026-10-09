@@ -554,11 +554,10 @@ pub fn status_color(s: &str) -> Color {
         match s.strip_suffix(",schedulingdisabled").unwrap_or(s) {
             s if failure_status(s) => red(),
             s if s.starts_with("init:") => yellow(),
-            "running" | "ready" | "active" | "bound" | "true" | "deployed" | "synced"
-            | "healthy" => green(),
+            s if healthy_status(s) => green(),
             // Faded, not "healthy green" — a finished pod isn't running, and a
             // scaled-to-zero workload isn't serving.
-            "succeeded" | "completed" | "superseded" | "uninstalled" | "scaleddown" => overlay0(),
+            s if done_status(s) => overlay0(),
             s if pending_status(s) || s == "outofsync" => yellow(),
             // Matches row_color's killColor — a distinct "on its way out" hue,
             // not the same bucket as Pending.
@@ -581,6 +580,40 @@ fn with_lowercase<R>(s: &str, f: impl FnOnce(&str) -> R) -> R {
         }
         None => f(&s.to_ascii_lowercase()),
     }
+}
+
+/// Sort rank of a status: failures first, then work in progress, and finished
+/// work last. Uses the same groups as [`status_color`].
+pub fn status_rank(s: &str) -> u8 {
+    with_lowercase(s, |s| {
+        if s == "ready,schedulingdisabled" {
+            return 1;
+        }
+        match s.strip_suffix(",schedulingdisabled").unwrap_or(s) {
+            s if failure_status(s) => 0,
+            s if s.starts_with("init:") || pending_status(s) || s == "outofsync" => 1,
+            "terminating" | "uninstalling" => 2,
+            s if healthy_status(s) => 4,
+            s if done_status(s) => 5,
+            _ => 3,
+        }
+    })
+}
+
+/// `s` must already be lowercase, like [`pending_status`].
+fn healthy_status(s: &str) -> bool {
+    matches!(
+        s,
+        "running" | "ready" | "active" | "bound" | "true" | "deployed" | "synced" | "healthy"
+    )
+}
+
+/// `s` must already be lowercase, like [`pending_status`].
+fn done_status(s: &str) -> bool {
+    matches!(
+        s,
+        "succeeded" | "completed" | "superseded" | "uninstalled" | "scaleddown"
+    )
 }
 
 /// `status` must already be lowercase: CRDs spell the same state as
@@ -656,7 +689,7 @@ pub fn row_color(s: &str) -> Color {
             s if failure_status(s) => red(),
             s if s.starts_with("init:") => peach(),
             s if pending_status(s) => peach(),
-            "completed" | "succeeded" | "superseded" | "uninstalled" | "scaleddown" => overlay0(),
+            s if done_status(s) => overlay0(),
             // k9s killColor — terminating/deleting rows.
             "terminating" | "uninstalling" => mauve(),
             _ => blue(),
@@ -677,6 +710,23 @@ pub fn severity_fg(sev: crate::thresholds::Severity) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_rank_puts_failures_first_and_finished_work_last() {
+        let ordered = [
+            "CrashLoopBackOff",
+            "Pending",
+            "Terminating",
+            "Unknown",
+            "Running",
+            "Completed",
+        ];
+        let ranks: Vec<u8> = ordered.iter().map(|s| status_rank(s)).collect();
+        assert!(ranks.is_sorted_by(|a, b| a < b), "{ranks:?}");
+        assert_eq!(status_rank("NotReady,SchedulingDisabled"), 0);
+        assert_eq!(status_rank("Ready,SchedulingDisabled"), 1);
+        assert_eq!(status_rank("Init:0/1"), status_rank("Pending"));
+    }
 
     #[test]
     fn all_builtins_parse() {

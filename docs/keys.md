@@ -44,9 +44,8 @@ ownership scope are cleared. Startup still uses the configured default resource.
 | `esc`                                                        | go back / pop the view stack / clear filter / clear marks                                                                                                                                        |
 | `j`/`k`, `↓`/`↑`, `g`/`G`                                    | navigate                                                                                                                                                                                         |
 | `ctrl-f` / `ctrl-b`, `PgDn` / `PgUp`                         | page forward / back - one screenful at a time                                                                                                                                                    |
-| `S` / `I`                                                    | sort-column picker (fuzzy; ⏎ on the active column inverts) / invert sort direction; saved per kind by default (`remember_sort = false` disables this)                                            |
-| `A`                                                          | sort by `AGE`; press again to invert; uses the sort memory setting                                                                                                                               |
-| `ctrl-e`                                                     | compact mode: collapse the header + footer (for tiled/multiplexed panes)                                                                                                                         |
+| `S` / `I`                                                    | sort-column picker (fuzzy; a new column starts descending; ⏎ on it again inverts) / invert sort direction; saved per kind by default (`remember_sort = false` disables this)                     |
+| `ctrl-e`                                                     | compact mode: collapse the header to one line (for tiled/multiplexed panes)                                                                                                                      |
 | `space`                                                      | mark/unmark row for bulk actions                                                                                                                                                                 |
 | `shift-up` / `shift-down`                                    | extend or reduce the marked range from the starting row                                                                                                                                          |
 | `ctrl-space`                                                 | mark every row from the last `space` mark to the cursor                                                                                                                                          |
@@ -95,6 +94,7 @@ ownership scope are cleared. Startup still uses the configured default resource.
 | `:find <text>`                                               | global fuzzy find over object names across common kinds, all namespaces                                                                                                                          |
 | `i`                                                          | set container image                                                                                                                                                                              |
 | `r`                                                          | rollout restart (marked workloads, or current) / force-sync (ExternalSecrets/PushSecrets) / rollback (Helm or rollout history) / refresh (elsewhere)                                             |
+| `ctrl-u`                                                     | workloads: rollout history, the same view as `:rollout-history`                                                                                                                                  |
 | `f` / `shift-f`                                              | port-forward (pods/services) — picker shows declared ports, or "Custom…" for manual entry; active forwards show `●` next to the name                                                             |
 | `t`                                                          | Flux and flux-operator: suspend/resume/reconcile (+ force where supported) · ArgoCD: suspend/resume (+ sync, sync with prune for App) · CronJobs: trigger/suspend/resume · pods: file transfer   |
 | `C` / `U` / `D`                                              | nodes: cordon / uncordon / open drain options                                                                                                                                                    |
@@ -203,7 +203,7 @@ the document. `esc` backs out - the first press clears an active search.
 
 `F` toggles fullscreen for document views and plugin popup output. Fullscreen
 uses the full terminal area without the application header, status line, key
-hints, borders, or scrollbars. The title and active search or command prompt
+hints, or borders. The title and active search or command prompt
 remain visible. Search, scrolling, wrapping, copying, and refresh still work.
 The setting stays on across refreshes and new documents for the current session.
 It starts off in a new session and is separate from the Logs fullscreen setting.
@@ -256,9 +256,7 @@ scroll position where possible, and the selected Explain resource when findings
 move or its status text changes. Findings without a resource target match by
 content. If the selected finding disappears, the selection clears. Select another
 finding before opening its resource, events, or logs.
-A shorter document can reduce the scroll position. The status indicator shows
-`refresh` while automatic refresh is on and `stopped` when it is off. Documents
-without refresh support, such as saved snapshots and Helm manifests, show `static`.
+A shorter document can reduce the scroll position.
 
 Automatic refresh stops when you leave the view, open help or the command
 palette, or a request fails. Document search keeps refresh active. A failed

@@ -209,6 +209,21 @@ async fn rollout_history_rejects_other_kinds() {
 }
 
 #[tokio::test]
+async fn ctrl_u_opens_the_rollout_history_of_the_selected_workload() {
+    let (mut app, _rx) = deployment_app(json!({}));
+    app.handle_key(ctrl(KeyCode::Char('u'))).unwrap();
+    assert_eq!(app.kind_plural, crate::rollout::VIEW);
+    assert_eq!(app.scope_label.as_deref(), Some("deploy/web"));
+    apply_revisions(&mut app);
+    let revisions: Vec<_> = app
+        .rows()
+        .iter()
+        .map(|o| crate::rollout::revision(o).unwrap())
+        .collect();
+    assert_eq!(revisions, vec![3, 2, 1]);
+}
+
+#[tokio::test]
 async fn enter_on_a_revision_diffs_the_live_template_against_it() {
     let (mut app, mut rx) = deployment_app(json!({}));
     open_history(&mut app);

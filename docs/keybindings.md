@@ -3,7 +3,7 @@
 All built-in keyboard actions can be changed in TOML or YAML config files.
 See [YAML format](configuration.md#yaml-format). With no `[keys]`
 settings, the default bindings remain active. `?` shows the effective bindings
-for each mode. The header and footer show the first binding for each action.
+for each mode. The header shows the first binding for each action.
 An action with no binding is shown as `unbound`.
 
 ## Example: Ctrl+U and Ctrl+D for paging
@@ -15,12 +15,14 @@ page_down = ["pagedown", "ctrl-f", "ctrl-d"]
 
 [keys.table]
 delete = "alt-d"
+rollout_history = "alt-u"
 ```
 
 The example retains the listed paging keys and adds `ctrl-u` and `ctrl-d`.
 The page size stays the same as before in each view. `ctrl-d` normally starts
-deletion in tables, so the example moves deletion to `alt-d`. Deletion still
-uses confirmation and read-only checks. In text inputs, `ctrl-u` still clears
+deletion in tables, so the example moves deletion to `alt-d`. `ctrl-u` normally
+opens the rollout history, so the example moves it to `alt-u`. Deletion and
+rollback still use confirmation and read-only checks. In text inputs, `ctrl-u` still clears
 the line.
 
 ## Values and scopes
@@ -97,7 +99,8 @@ plugins. A released key becomes available to them. `:config` reports keys hidden
 by a built-in action when that action is available. Kind-specific table actions
 only claim their key on the kinds they act on: `cordon`, `uncordon`, and `drain`
 on nodes, `attach` and `previous_logs` on pods, `set_image` on pods and workload
-controllers, and `inspect` on secrets and PVCs. On other kinds, bookmarks,
+controllers, `rollout_history` on Deployments, StatefulSets, and DaemonSets, and
+`inspect` on secrets and PVCs. On other kinds, bookmarks,
 workspaces, and matching plugins get the key first. Bookmarks, workspaces, and
 matching plugins also take priority over the table's `faults` action.
 
@@ -305,6 +308,7 @@ for those operations.
 
 | Action           | Default bindings              |
 | ---------------- | ----------------------------- |
+| `accept`         | `enter`                       |
 | `back`           | `esc`                         |
 | `close`          | `q`                           |
 | `copy`           | `c`                           |
@@ -649,6 +653,7 @@ for those operations.
 | `refresh`            | `ctrl-r`             |
 | `restart_or_refresh` | `r`                  |
 | `right`              | `right`              |
+| `rollout_history`    | `ctrl-u`             |
 | `set_image`          | `i`                  |
 | `shell_or_scale`     | `s`                  |
 | `sort`               | `S`                  |

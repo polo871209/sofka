@@ -427,9 +427,7 @@ async fn run_main(args: Args) -> Result<()> {
     // file for the starting context wins over the base/auto-detected skin,
     // but only the base skin becomes the session skin, so switching away
     // from an overridden context falls back correctly.
-    let session_skin = loader
-        .resolve("", "")
-        .config
+    let session_skin = base
         .skin
         .name
         .unwrap_or_else(|| theme::auto_skin_name().to_string());
@@ -1264,12 +1262,9 @@ async fn run(
             _ = activity_frame.tick(), if app.plugin_activity_visible() => {
                 dirty = true;
             }
-            _ = frame.tick(), if dirty || app.scrollbar_activity.is_some() => {
-                let expired = app.expire_scrollbars();
-                if dirty || expired {
-                    ui::present(terminal, app)?;
-                    dirty = false;
-                }
+            _ = frame.tick(), if dirty => {
+                ui::present(terminal, app)?;
+                dirty = false;
             }
             _ = tick.tick() => {
                 app.reap_port_forwards(); // age columns + drop dead forwards

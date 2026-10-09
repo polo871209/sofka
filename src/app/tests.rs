@@ -1305,6 +1305,7 @@ async fn every_picker_pages_with_pageup_and_pagedown() {
     app.switch_kind("pods");
     app.handle_key(press(KeyCode::Char('S'))).unwrap();
     assert_eq!(app.mode, Mode::SortPicker);
+    app.sort_picker_state.select(Some(0));
     page_through(&mut app, |a| a.sort_picker_state.selected());
 }
 
@@ -1321,18 +1322,17 @@ async fn document_scroll_keeps_the_last_page_filled() {
         ..Default::default()
     };
 
-    // A 24-row terminal leaves 13 content rows after the standard header,
-    // footer, prompt, and document border.
+    // A 24-row terminal leaves 17 content rows after the standard header and document border.
     let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
     term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
 
     app.handle_key(press(KeyCode::Char('G'))).unwrap();
-    assert_eq!(app.detail.scroll, 17, "bottom keeps a full viewport");
+    assert_eq!(app.detail.scroll, 13, "bottom keeps a full viewport");
     app.handle_key(press(KeyCode::Char('j'))).unwrap();
-    assert_eq!(app.detail.scroll, 17, "cannot scroll past the last page");
+    assert_eq!(app.detail.scroll, 13, "cannot scroll past the last page");
     app.handle_key(press(KeyCode::Char('k'))).unwrap();
     assert_eq!(
-        app.detail.scroll, 16,
+        app.detail.scroll, 12,
         "up moves immediately from the bottom"
     );
 
@@ -1363,9 +1363,9 @@ async fn document_scroll_keeps_the_last_page_filled() {
     let mut term = Terminal::new(TestBackend::new(20, 24)).unwrap();
     term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
     app.handle_key(press(KeyCode::Char('G'))).unwrap();
-    assert_eq!(app.detail.scroll, 7, "bottom uses wrapped display rows");
+    assert_eq!(app.detail.scroll, 3, "bottom uses wrapped display rows");
     app.handle_key(press(KeyCode::Char('j'))).unwrap();
-    assert_eq!(app.detail.scroll, 7, "wrapped bottom remains clamped");
+    assert_eq!(app.detail.scroll, 3, "wrapped bottom remains clamped");
 
     term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
     let buffer = term.backend().buffer();
@@ -1396,7 +1396,7 @@ async fn document_scroll_keeps_the_last_page_filled() {
     term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
     app.handle_key(press(KeyCode::Char('G'))).unwrap();
     assert_eq!(
-        app.detail.scroll, 7,
+        app.detail.scroll, 3,
         "tabs must not inflate the wrapped bottom offset"
     );
 }
@@ -2028,6 +2028,44 @@ async fn diff_prefers_last_applied_when_present() {
         app.detail.title.contains("last-applied"),
         "{}",
         app.detail.title
+    );
+}
+
+#[tokio::test]
+async fn diff_keeps_no_session_copy_while_last_applied_exists() {
+    let (mut app, _rx) = test_app();
+    app.switch_kind("deployments");
+    let dep = |rv: &str, replicas: i64, annotated: bool| {
+        let mut obj = json!({
+            "apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"name": "web", "namespace": "default", "resourceVersion": rv},
+            "spec": {"replicas": replicas}
+        });
+        if annotated {
+            obj["metadata"]["annotations"] =
+                json!({"kubectl.kubernetes.io/last-applied-configuration": "{}"});
+        }
+        obj
+    };
+    apply(&mut app, dep("1", 1, true));
+    apply(&mut app, dep("2", 2, true));
+    assert!(app.prev_revisions.map.is_empty());
+
+    // Once the annotation goes away, the last annotated revision is the baseline.
+    apply(&mut app, dep("3", 3, false));
+    app.table_state.select(Some(0));
+    app.handle_key(press(KeyCode::Char(':'))).unwrap();
+    for c in "diff".chars() {
+        app.handle_key(press(KeyCode::Char(c))).unwrap();
+    }
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(app.mode, Mode::Diff);
+    assert!(app.detail.title.contains("session"), "{}", app.detail.title);
+    assert!(
+        app.detail
+            .lines
+            .iter()
+            .any(|l| l.starts_with('-') && l.contains("replicas: 2"))
     );
 }
 
@@ -2931,9 +2969,11 @@ async fn port_forward_marker_renders_in_table() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // The forwarded row "alpha" should have a ● before its name.
+    // The forwarded row "alpha" should have a ● before its name. The header
+    // rows above the table show the port-forward flash, which also names alpha.
     let alpha_line = screen
         .lines()
+        .skip(5)
         .find(|l| l.contains("alpha"))
         .expect("alpha row in screen");
     assert!(
@@ -2990,7 +3030,7 @@ fn forward_context_matching_and_validation() {
 }
 
 #[tokio::test]
-async fn pod_status_changes_keep_column_positions_stable() {
+async fn pod_status_column_fits_widest_status() {
     use ratatui::{Terminal, backend::TestBackend};
 
     for width in [80, 120, 180] {
@@ -3003,7 +3043,6 @@ async fn pod_status_changes_keep_column_positions_stable() {
         assert_eq!(app.kind_plural, "pods");
 
         let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
-        let mut initial_columns = None;
         for status in [
             "Pending",
             "ContainerCreating",
@@ -3045,16 +3084,16 @@ async fn pod_status_changes_keep_column_positions_stable() {
                 .iter()
                 .find(|(_, _, index)| *index == status_index)
                 .unwrap();
-            assert_eq!(end - start, 26, "status width at terminal width {width}");
+            assert_eq!(
+                usize::from(end - start),
+                // Pods sort by STATUS by default, and the arrow adds 2 cells to the header.
+                status.len().max("STATUS".len() + 2),
+                "status width for {status} at terminal width {width}"
+            );
             let status_cell: String = (start..end)
                 .map(|x| terminal.backend().buffer()[(x, hit.rows_y)].symbol())
                 .collect();
             assert_eq!(status_cell.trim(), status);
-            if let Some(ref columns) = initial_columns {
-                assert_eq!(&hit.cols, columns, "columns moved for {status} at {width}");
-            } else {
-                initial_columns = Some(hit.cols);
-            }
         }
     }
 }
@@ -3122,9 +3161,10 @@ async fn cordoned_node_statuses_keep_readiness_colors() {
     };
     let (name_start, name_end) = column_range("NAME");
     let (status_start, status_end) = column_range("STATUS");
-    let ready_y = hit.rows_y;
-    let not_ready_y = ready_y + 1;
-    let unknown_y = ready_y + 2;
+    // The default status sort puts the failing node first.
+    let not_ready_y = hit.rows_y;
+    let ready_y = not_ready_y + 1;
+    let unknown_y = not_ready_y + 2;
 
     assert_eq!(
         cell_text(&terminal, name_start, name_end, ready_y),
@@ -3180,18 +3220,10 @@ async fn cordoned_node_statuses_keep_readiness_colors() {
 }
 
 #[tokio::test]
-async fn narrow_header_drops_the_logo_before_the_key_hints() {
+async fn narrow_header_drops_the_key_hints() {
     use ratatui::{Terminal, backend::TestBackend};
 
-    for (width, hints, logo) in [
-        (80, false, true),
-        (91, false, true),
-        (92, true, false),
-        (100, true, false),
-        (117, true, false),
-        (118, true, true),
-        (130, true, true),
-    ] {
+    for (width, hints) in [(80, false), (91, false), (92, true), (130, true)] {
         let (mut app, _rx) = test_app();
         app.handle_key(press(KeyCode::Char(':'))).unwrap();
         for c in "pods".chars() {
@@ -3211,7 +3243,7 @@ async fn narrow_header_drops_the_logo_before_the_key_hints() {
             hints,
             "hints at width {width}"
         );
-        assert_eq!(header.contains("sofka v"), logo, "logo at width {width}");
+        assert!(!header.contains("sofka v"), "no logo at width {width}");
     }
 }
 
@@ -3467,6 +3499,8 @@ async fn horizontal_scroll_keeps_names_and_moves_content_without_resizing() {
         })
         .unwrap();
         assert_eq!(app.sort_column, Some(index));
+        // The sort arrow widens the clicked header, so redraw before the scroll limit is read.
+        term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         app.handle_key(press(KeyCode::Left)).unwrap();
         assert_eq!(app.col_offset, 0);
         for _ in 0..100 {
@@ -4183,6 +4217,43 @@ async fn adjacent_esc_returns_to_the_table_and_cancels_the_gather() {
     });
     assert!(app.adjacent_items.is_empty());
     assert_eq!(app.mode, Mode::Table);
+}
+
+#[tokio::test]
+async fn yaml_view_colors_label_keys_and_block_scalars() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let (mut app, _rx) = test_app();
+    app.switch_kind("pods");
+    apply(
+        &mut app,
+        json!({
+            "apiVersion": "v1", "kind": "Pod",
+            "metadata": {
+                "name": "web", "namespace": "default",
+                "labels": {"app.kubernetes.io/name": "web"},
+                "annotations": {"script": "echo hi\nkey: value\n"}
+            }
+        }),
+    );
+    app.table_state.select(Some(0));
+    app.handle_key(press(KeyCode::Char('y'))).unwrap();
+    assert_eq!(app.mode, Mode::Detail);
+    assert_eq!(app.detail.syntax, super::Syntax::Yaml);
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let fg_at = |text: &str| {
+        (0..40)
+            .find_map(|y| {
+                let line: String = (0..120).map(|x| buffer[(x, y)].symbol()).collect();
+                line.find(text)
+                    .map(|i| buffer[(line[..i].chars().count() as u16, y)].fg)
+            })
+            .unwrap_or_else(|| panic!("{text} not rendered"))
+    };
+    assert_eq!(fg_at("app.kubernetes.io/name"), crate::theme::lavender());
+    assert_eq!(fg_at("key: value"), crate::theme::green());
 }
 
 #[tokio::test]
@@ -6023,7 +6094,6 @@ async fn range_selection_resets_after_filter_sort_and_view_changes() {
     range_key(&mut app, KeyCode::Up);
     assert_marks(&app, &["a", "b"]);
     select_sort_with_keys(&mut app, "NAME");
-    app.handle_key(press(KeyCode::Char('I'))).unwrap();
     range_key(&mut app, KeyCode::Down);
     assert_marks(&app, &["a", "b", "d", "e"]);
     palette(&mut app, "services");
@@ -8806,10 +8876,10 @@ async fn sort_by_numeric_column_and_invert() {
     apply(&mut app, pod("b", 1));
     apply(&mut app, pod("c", 9));
 
-    // RESTARTS is the 4th pod column; sort by it numerically (not "1,5,9"
+    // RESTARTS is the 8th pod column; sort by it numerically (not "1,5,9"
     // as strings, which happens to agree here, but parsing is what matters).
-    assert_eq!(app.display_headers().to_vec()[3], "RESTARTS");
-    app.sort_column = Some(3);
+    assert_eq!(app.display_headers().to_vec()[7], "RESTARTS");
+    app.sort_column = Some(7);
     app.invalidate_rows();
     let names: Vec<String> = app
         .rows()
@@ -8865,13 +8935,13 @@ async fn name_sort_uses_natural_numeric_segments() {
     assert_eq!(app.sort_column, Some(0));
     assert_eq!(
         names(&app),
-        ["pod-0", "pod-1", "pod-2", "pod-9", "pod-10", "pod-11"]
+        ["pod-11", "pod-10", "pod-9", "pod-2", "pod-1", "pod-0"]
     );
 
     app.handle_key(press(KeyCode::Char('I'))).unwrap();
     assert_eq!(
         names(&app),
-        ["pod-11", "pod-10", "pod-9", "pod-2", "pod-1", "pod-0"]
+        ["pod-0", "pod-1", "pod-2", "pod-9", "pod-10", "pod-11"]
     );
 }
 
@@ -8907,8 +8977,8 @@ async fn sorted_order_updates_when_an_object_changes() {
     apply(&mut app, pod("a", "1", 5));
     apply(&mut app, pod("b", "1", 1));
     apply(&mut app, pod("c", "1", 9));
-    assert_eq!(app.display_headers().to_vec()[3], "RESTARTS");
-    app.sort_column = Some(3);
+    assert_eq!(app.display_headers().to_vec()[7], "RESTARTS");
+    app.sort_column = Some(7);
     app.invalidate_rows();
     let names = |app: &App| -> Vec<String> {
         app.rows()
@@ -9037,14 +9107,16 @@ async fn sort_picker_picks_toggles_and_clears() {
     let (mut app, _rx) = test_app();
     app.switch_kind("pods");
 
-    // `S` opens the picker: default entry pinned first and selected (no sort).
+    // `S` opens the picker: the ns/name entry is pinned first, and the cursor
+    // is on STATUS, the default sort.
     app.handle_key(press(KeyCode::Char('S'))).unwrap();
     assert_eq!(app.mode, Mode::SortPicker);
     assert_eq!(app.filtered_sort_entries().to_vec()[0], DEFAULT_SORT_LABEL);
-    assert_eq!(app.sort_picker_state.selected(), Some(0));
+    assert_eq!(app.filtered_sort_entries().to_vec()[3], "STATUS");
+    assert_eq!(app.sort_picker_state.selected(), Some(3));
 
     // Type-to-filter fuzzy-matches columns; the cursor lands on the best
-    // match (right after the pinned default) and enter selects it, ascending.
+    // match (right after the pinned default) and enter selects it, high to low.
     for c in "rst".chars() {
         app.handle_key(press(KeyCode::Char(c))).unwrap();
     }
@@ -9059,22 +9131,23 @@ async fn sort_picker_picks_toggles_and_clears() {
         .position(|h| h == "RESTARTS");
     assert!(restarts.is_some());
     assert_eq!(app.sort_column, restarts);
-    assert!(!app.sort_desc);
-    assert!(app.flash.contains("RESTARTS") && app.flash.contains("asc"));
+    assert!(app.sort_desc);
+    assert!(app.flash.contains("RESTARTS") && app.flash.contains("desc"));
 
     // Reopening lands on the active column; re-picking it inverts direction.
     app.handle_key(press(KeyCode::Char('S'))).unwrap();
     assert_eq!(app.sort_picker_state.selected(), restarts.map(|i| i + 1));
     app.handle_key(press(KeyCode::Enter)).unwrap();
     assert_eq!(app.sort_column, restarts);
-    assert!(app.sort_desc);
+    assert!(!app.sort_desc);
+    assert!(app.flash.contains("asc"));
 
-    // Picking a different column resets to ascending.
+    // Picking a different column starts high to low again.
     app.handle_key(press(KeyCode::Char('S'))).unwrap();
     app.sort_picker_state.select(Some(1)); // NAME (first column)
     app.handle_key(press(KeyCode::Enter)).unwrap();
     assert_eq!(app.sort_column, Some(0));
-    assert!(!app.sort_desc);
+    assert!(app.sort_desc);
 
     // The pinned default entry clears the sort.
     app.handle_key(press(KeyCode::Char('S'))).unwrap();
@@ -9085,17 +9158,56 @@ async fn sort_picker_picks_toggles_and_clears() {
 }
 
 #[tokio::test]
+async fn views_open_sorted_by_status_with_failures_first() {
+    let (mut app, _rx) = test_app();
+    palette(&mut app, "pods");
+    for (name, phase) in [
+        ("a-done", "Succeeded"),
+        ("b-running", "Running"),
+        ("c-pending", "Pending"),
+        ("d-failed", "Failed"),
+    ] {
+        apply(
+            &mut app,
+            json!({"apiVersion":"v1", "kind":"Pod",
+                "metadata": {"name":name, "namespace":"default"},
+                "status": {"phase":phase}}),
+        );
+    }
+    assert_eq!(app.display_headers()[app.sort_column.unwrap()], "STATUS");
+    assert_eq!(
+        row_names(&app),
+        ["d-failed", "c-pending", "b-running", "a-done"]
+    );
+
+    // The pinned ns/name entry still orders by name.
+    app.handle_key(press(KeyCode::Char('S'))).unwrap();
+    app.sort_picker_state.select(Some(0));
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(
+        row_names(&app),
+        ["a-done", "b-running", "c-pending", "d-failed"]
+    );
+
+    // A configured sort wins over the status default.
+    install_views(&mut app, "[views.pods]\nsort = \"NAME:desc\"\n");
+    palette(&mut app, "services");
+    palette(&mut app, "pods");
+    assert_eq!(app.sort_column, Some(0));
+    assert!(app.sort_desc);
+}
+
+#[tokio::test]
 async fn sort_choice_is_remembered_per_kind_across_view_switches() {
     let (mut app, _rx) = test_app();
     app.switch_kind("pods");
 
-    // Pick RESTARTS via the picker, then invert with `I`.
+    // Pick RESTARTS via the picker, which sorts high to low.
     app.handle_key(press(KeyCode::Char('S'))).unwrap();
     for c in "rst".chars() {
         app.handle_key(press(KeyCode::Char(c))).unwrap();
     }
     app.handle_key(press(KeyCode::Enter)).unwrap();
-    app.handle_key(press(KeyCode::Char('I'))).unwrap();
     let restarts = app
         .display_headers()
         .to_vec()
@@ -9105,9 +9217,11 @@ async fn sort_choice_is_remembered_per_kind_across_view_switches() {
     assert!(app.sort_desc);
     assert_eq!(app.sort_memory.get("pods"), Some(("RESTARTS".into(), true)));
 
-    // A kind with no memory starts unsorted; the pods memory is untouched.
+    // A kind with no memory starts on the status sort; the pods memory is untouched.
     app.switch_kind("deployments");
-    assert_eq!(app.sort_column, None);
+    let status = |app: &App| app.display_headers().iter().position(|h| h == "STATUS");
+    assert!(status(&app).is_some());
+    assert_eq!(app.sort_column, status(&app));
     assert_eq!(app.sort_memory.get("pods"), Some(("RESTARTS".into(), true)));
 
     // Coming back restores column and direction.
@@ -9146,7 +9260,7 @@ async fn sort_choice_is_remembered_per_kind_across_view_switches() {
     assert_eq!(app.sort_memory.get("pods"), None);
     app.switch_kind("deployments");
     app.switch_kind("pods");
-    assert_eq!(app.sort_column, None);
+    assert_eq!(app.sort_column, status(&app));
 }
 
 #[tokio::test]
@@ -9207,7 +9321,11 @@ async fn wildcard_sort_applies_when_wide_columns_appear() {
         app.remember_sort = remember;
         install_views(&mut app, "[views.\"*\"]\nsort = \"IP:desc\"\n");
         palette(&mut app, "pods");
-        assert_eq!(app.sort_column, None);
+        // IP is wide-only, so the view starts on the status sort.
+        assert_eq!(
+            app.sort_column,
+            app.display_headers().iter().position(|h| h == "STATUS")
+        );
         app.handle_key(press(KeyCode::Char('w'))).unwrap();
         assert_eq!(
             app.sort_column,
@@ -9235,7 +9353,7 @@ async fn temporary_wide_sort_keeps_its_column_and_direction_until_cleared_or_nav
             palette(&mut app, "pods");
             app.handle_key(press(KeyCode::Char('w'))).unwrap();
             select_sort_with_keys(&mut app, "IP");
-            if desc {
+            if !desc {
                 app.handle_key(press(KeyCode::Char('I'))).unwrap();
             }
             app.handle_key(press(KeyCode::Char('w'))).unwrap();
@@ -9307,7 +9425,7 @@ async fn new_sort_selection_replaces_a_hidden_temporary_sort() {
     select_sort_with_keys(&mut app, "NAME");
     app.handle_key(press(KeyCode::Char('w'))).unwrap();
     assert_eq!(app.sort_column, Some(0));
-    assert!(!app.sort_desc);
+    assert!(app.sort_desc);
     assert_eq!(app.sort_memory.get("pods"), None);
 }
 
@@ -9353,7 +9471,6 @@ async fn temporary_printer_sort_waits_when_its_column_is_removed_then_restored()
     palette(&mut app, "certificates");
     deliver_ready_printer_column(&mut app);
     select_sort_with_keys(&mut app, "READY");
-    app.handle_key(press(KeyCode::Char('I'))).unwrap();
     app.handle_msg(Msg::PrinterColumns {
         generation: app.generation,
         resource: app.cluster.resolve("certificates").unwrap().resource_key(),
@@ -9404,7 +9521,8 @@ async fn wildcard_sort_applies_when_printer_columns_arrive_without_replacing_use
             app.display_headers().iter().position(|h| h == header)
         );
         assert!(app.sort_column.is_some());
-        assert_eq!(app.sort_desc, !choose_name);
+        // Both the configured `READY:desc` and a fresh `S` pick sort high to low.
+        assert!(app.sort_desc);
     }
 }
 
@@ -9610,6 +9728,8 @@ async fn sort_can_be_selected_again_after_clearing_with_memory_disabled() {
                 modifiers: KeyModifiers::NONE,
             })
             .unwrap();
+            // A header click sorts low to high first.
+            app.handle_key(press(KeyCode::Char('I'))).unwrap();
         } else {
             app.handle_key(press(KeyCode::Char('S'))).unwrap();
             for c in "name".chars() {
@@ -9617,7 +9737,6 @@ async fn sort_can_be_selected_again_after_clearing_with_memory_disabled() {
             }
             app.handle_key(press(KeyCode::Enter)).unwrap();
         }
-        app.handle_key(press(KeyCode::Char('I'))).unwrap();
         deliver_ready_printer_column(&mut app);
         assert_eq!(app.sort_column, Some(0));
         assert!(app.sort_desc);
@@ -9700,7 +9819,10 @@ async fn sort_picker_esc_clears_filter_then_closes() {
     assert!(app.sort_picker_filter.is_empty());
     app.handle_key(press(KeyCode::Esc)).unwrap();
     assert_eq!(app.mode, Mode::Table);
-    assert_eq!(app.sort_column, None);
+    assert_eq!(
+        app.sort_column,
+        app.display_headers().iter().position(|h| h == "STATUS")
+    );
 }
 
 #[tokio::test]
@@ -9708,12 +9830,12 @@ async fn sort_picker_ctrl_n_p_navigate_without_touching_filter() {
     let (mut app, _rx) = test_app();
     app.switch_kind("pods");
     app.handle_key(press(KeyCode::Char('S'))).unwrap();
-    assert_eq!(app.sort_picker_state.selected(), Some(0));
+    assert_eq!(app.sort_picker_state.selected(), Some(3));
 
     app.handle_key(ctrl(KeyCode::Char('n'))).unwrap();
-    assert_eq!(app.sort_picker_state.selected(), Some(1));
+    assert_eq!(app.sort_picker_state.selected(), Some(4));
     app.handle_key(ctrl(KeyCode::Char('p'))).unwrap();
-    assert_eq!(app.sort_picker_state.selected(), Some(0));
+    assert_eq!(app.sort_picker_state.selected(), Some(3));
     assert!(
         app.sort_picker_filter.is_empty(),
         "ctrl-n/p must not fall through to the type-to-filter buffer"
@@ -10036,9 +10158,9 @@ async fn nodes_view_committed_capacity_renders_sorts_and_filters() {
         app.handle_key(press(KeyCode::Char(c))).unwrap();
     }
     app.handle_key(press(KeyCode::Enter)).unwrap();
-    assert_eq!(row_names(&app), ["gpu", "small"]);
-    app.handle_key(press(KeyCode::Char('I'))).unwrap();
     assert_eq!(row_names(&app), ["small", "gpu"]);
+    app.handle_key(press(KeyCode::Char('I'))).unwrap();
+    assert_eq!(row_names(&app), ["gpu", "small"]);
 
     type_filter(&mut app, "gpu/r>=50");
     assert_eq!(row_names(&app), ["gpu"]);
@@ -14022,15 +14144,6 @@ async fn other_commands_do_not_reload_the_document() {
 }
 
 #[tokio::test]
-async fn edit_hint_hides_in_read_only_mode() {
-    let (mut app, _rx) = app_with_pod();
-    app.handle_key(press(KeyCode::Char('y'))).unwrap();
-    assert!(screen_text(&mut app, 200, 30).contains("edit"));
-    app.readonly = true;
-    assert!(!screen_text(&mut app, 200, 30).contains("edit"));
-}
-
-#[tokio::test]
 async fn mutating_action_is_recorded_in_the_journal() {
     let (mut app, _rx) = app_with_pod();
     assert!(app.journal.is_empty(), "journal starts empty");
@@ -14884,44 +14997,47 @@ async fn tab_cycle_clears_drill_scope_and_filter() {
 }
 
 #[tokio::test]
-async fn resource_cycle_hint_is_visible_and_changes_for_a_workspace() {
+async fn no_view_draws_a_bottom_hint_row() {
     use ratatui::{Terminal, backend::TestBackend};
 
-    let (mut app, _rx) = test_app();
-    app.switch_kind("pods");
-    app.workspaces = vec![crate::config::Workspace {
-        key: Some("ctrl-w".into()),
-        name: "ops".into(),
-        views: vec![crate::config::WorkspaceView {
-            name: "Pods".into(),
-            resource: "pods".into(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }];
-    for (key, expected) in [
-        (press(KeyCode::Tab), "tab/backtab: resources"),
-        (ctrl(KeyCode::Char('w')), "tab/backtab: workspace"),
+    let (mut app, _rx) = app_with_pod();
+    let last_row = |app: &mut App, width: u16| {
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..width)
+            .map(|x| buffer[(x, 23)].symbol())
+            .collect::<String>()
+    };
+    for key in [
+        press(KeyCode::Esc),
+        press(KeyCode::Char('y')),
+        press(KeyCode::Esc),
+        press(KeyCode::Char('l')),
+        press(KeyCode::Esc),
+        press(KeyCode::Char('?')),
     ] {
         app.handle_key(key).unwrap();
         for width in [60, 160] {
-            let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
-            terminal
-                .draw(|frame| crate::ui::draw(frame, &mut app))
-                .unwrap();
-            let screen: String = terminal
-                .backend()
-                .buffer()
-                .content
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect();
+            let row = last_row(&mut app, width);
             assert!(
-                screen.contains(expected),
-                "missing {expected} at width {width}"
+                row.starts_with('╰'),
+                "{:?} at width {width}: {row}",
+                app.mode
+            );
+            assert!(
+                !row.contains("help"),
+                "{:?} at width {width}: {row}",
+                app.mode
             );
         }
     }
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    app.hide_header = true;
+    assert!(!last_row(&mut app, 160).contains("y:yaml"));
+    app.hide_header = false;
+    app.handle_key(press(KeyCode::Char('/'))).unwrap();
+    assert!(last_row(&mut app, 160).starts_with('/'));
 }
 
 #[tokio::test]
@@ -15610,6 +15726,8 @@ async fn help_search_keeps_section_headings_with_matching_bindings() {
                 assert!(binding.contains(label), "{heading}: {binding}");
                 let description = if scope == "drain" && action == Action::Accept {
                     "review options; close a completed drain"
+                } else if scope == "diff" && action == Action::Accept {
+                    "roll back to the compared revision (rollout history diff)"
                 } else {
                     action.description()
                 };
@@ -15633,7 +15751,7 @@ async fn help_search_keeps_section_headings_with_matching_bindings() {
 async fn help_pages_use_the_rendered_height() {
     use ratatui::{Terminal, backend::TestBackend};
 
-    for (height, page) in [(12, 1), (19, 8), (24, 13), (40, 29)] {
+    for (height, page) in [(12, 5), (19, 12), (24, 17), (40, 33)] {
         let (mut app, _rx) = test_app();
         app.handle_key(press(KeyCode::Char('?'))).unwrap();
         let mut term = Terminal::new(TestBackend::new(120, height)).unwrap();
@@ -15735,7 +15853,7 @@ async fn help_scrolls_and_resets_on_reopen() {
 async fn help_pages_use_new_dimensions_immediately_after_resize() {
     use ratatui::{Terminal, backend::TestBackend};
 
-    for (before, after, page) in [(24, 19, 8), (19, 24, 13)] {
+    for (before, after, page) in [(24, 19, 12), (19, 24, 17)] {
         let (mut app, _rx) = test_app();
         app.handle_key(press(KeyCode::Char('?'))).unwrap();
         let mut term = Terminal::new(TestBackend::new(120, before)).unwrap();
@@ -15765,12 +15883,12 @@ async fn help_paging_updates_after_resize_and_compact_mode() {
 
     term.backend_mut().resize(120, 24);
     term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-    assert_eq!(app.help_viewport_h, 13);
+    assert_eq!(app.help_viewport_h, 17);
     assert_eq!(app.help_max_scroll, old_max - 5);
     assert_eq!(app.help_scroll, app.help_max_scroll);
     app.handle_key(press(KeyCode::Home)).unwrap();
     app.handle_key(press(KeyCode::PageDown)).unwrap();
-    assert_eq!(app.help_scroll, 13);
+    assert_eq!(app.help_scroll, 17);
 
     app.handle_key(ctrl(KeyCode::Char('e'))).unwrap();
     term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
@@ -16040,6 +16158,8 @@ async fn user_status_column_colors_crd_words_in_any_case() {
         );
     }
 
+    // Status sort puts a failing row first, and the selection highlight would hide its color.
+    app.table_state.select(None);
     for (name, phase, badge, row) in [
         (
             "shoot-a",
@@ -16099,6 +16219,8 @@ async fn user_status_column_default_fills_missing_values() {
         );
     }
 
+    // Status sort puts a failing row first, and the selection highlight would hide its color.
+    app.table_state.select(None);
     for name in ["machine-b", "machine-c"] {
         assert_eq!(
             health_row_color(&mut app, name, "Pending"),
@@ -16142,6 +16264,8 @@ async fn user_condition_column_default_fills_a_missing_condition() {
         );
     }
 
+    // Status sort puts a failing row first, and the selection highlight would hide its color.
+    app.table_state.select(None);
     assert_eq!(
         health_row_color(&mut app, "machine-b", "False"),
         crate::theme::red()
@@ -16701,22 +16825,26 @@ async fn wide_toggle_reveals_pod_columns_and_keeps_sort() {
     app.switch_kind("pods");
     assert_eq!(
         app.display_headers().to_vec(),
-        ["NAME", "READY", "STATUS", "RESTARTS", "AGE", "CPU", "MEM"]
+        [
+            "NAME", "READY", "STATUS", "%CPU/R", "CPU", "%MEM/R", "MEM", "RESTARTS", "AGE"
+        ]
     );
 
     // Sort by AGE, then widen: the sort must follow the column's new index.
-    app.sort_column = Some(4);
+    select_sort_with_keys(&mut app, "AGE");
+    assert_eq!(app.sort_column, Some(8));
     app.handle_key(press(KeyCode::Char('w'))).unwrap();
     assert_eq!(
         app.display_headers().to_vec(),
         [
-            "NAME", "READY", "STATUS", "RESTARTS", "IP", "NODE", "AGE", "CPU", "MEM"
+            "NAME", "READY", "STATUS", "%CPU/R", "CPU", "%MEM/R", "MEM", "RESTARTS", "IP", "NODE",
+            "AGE"
         ]
     );
-    assert_eq!(app.sort_column, Some(6));
+    assert_eq!(app.sort_column, Some(10));
 
     // Narrow again while sorted on a wide-only column: sort resets.
-    app.sort_column = Some(4); // IP
+    select_sort_with_keys(&mut app, "IP");
     app.handle_key(press(KeyCode::Char('w'))).unwrap();
     assert_eq!(app.sort_column, None);
 }
@@ -17557,7 +17685,7 @@ async fn selectors_reach_streaming_list_and_watch_requests_from_keys() {
         sync_selector_view(&mut app, &mut rx).await;
         let uri = next_selector_request(&mut requests).await;
         assert!(!uri.query().unwrap().contains("Selector="));
-        assert_eq!(row_names(&app), ["api", "other"]);
+        assert_eq!(row_names(&app), ["other", "api"]);
     }
 }
 
@@ -17655,7 +17783,7 @@ async fn boolean_groups_short_circuit_and_match_operational_queries() {
     retype_filter(&mut app, "!(status=Pending || restarts>=5)");
     assert_eq!(row_names(&app), ["api"]);
     retype_filter(&mut app, "api || worker && restarts>=5");
-    assert_eq!(row_names(&app), ["api", "worker"]);
+    assert_eq!(row_names(&app), ["worker", "api"]);
     retype_filter(
         &mut app,
         "spec.nodeName=node-3 metadata.namespace=prod status.phase=Pending",
@@ -17769,7 +17897,7 @@ async fn saved_selector_is_on_the_first_watch_and_visible_in_ui() {
     assert_eq!(app.filter_location(), " ·pending ⏎");
     app.handle_key(press(KeyCode::Enter)).unwrap();
     sync_selector_view(&mut app, &mut rx).await;
-    assert_eq!(row_names(&app), ["api", "other"]);
+    assert_eq!(row_names(&app), ["other", "api"]);
     assert_eq!(app.filter_location(), " ·local");
 }
 
@@ -20150,6 +20278,10 @@ async fn relist_over_cached_rows_swaps_atomically_on_sync() {
 async fn unchanged_row_order_reuses_shared_keys_on_content_updates() {
     let (mut app, _rx) = test_app();
     app.switch_kind("pods");
+    // Clear the default status sort, so the update below is unsorted.
+    app.handle_key(press(KeyCode::Char('S'))).unwrap();
+    app.sort_picker_state.select(Some(0));
+    app.handle_key(press(KeyCode::Enter)).unwrap();
     let pod_state = |rv: &str, phase: &str| {
         json!({
             "apiVersion": "v1", "kind": "Pod",
@@ -21664,7 +21796,7 @@ async fn faults_filter_combines_with_text_and_tracks_watch_updates() {
     pod["metadata"]["resourceVersion"] = json!("2");
     pod["status"]["conditions"][0]["status"] = json!("False");
     apply(&mut app, pod.clone());
-    assert_eq!(row_names(&app), ["api", "other"]);
+    assert_eq!(row_names(&app), ["other", "api"]);
     type_filter(&mut app, "api");
     assert_eq!(row_names(&app), ["api"]);
     app.handle_key(ctrl(KeyCode::Char('z'))).unwrap();
@@ -25223,7 +25355,13 @@ async fn sidecar_failures_remain_visible_after_initialization() {
             "3"
         );
         retype_filter(&mut app, "");
-        app.handle_key(press(KeyCode::End)).unwrap();
+        // Select the other pod. The status sort puts a failing pod first and a done pod last.
+        let other = if expected == "Succeeded" {
+            KeyCode::Home
+        } else {
+            KeyCode::End
+        };
+        app.handle_key(press(other)).unwrap();
         let color = if expected == "Succeeded" {
             crate::theme::overlay0()
         } else {
@@ -25482,30 +25620,20 @@ async fn explain_scrolled_into_tall_finding(message: &str, rows: usize) -> (App,
 }
 
 #[tokio::test]
-async fn the_scrollbar_follows_scrolling_inside_a_tall_finding() {
+async fn j_scrolls_inside_a_tall_finding_before_moving_on() {
     let message = "admission webhook denied the request ".repeat(80);
-    let (mut app, _rx) = explain_scrolled_into_tall_finding(&message, 1).await;
-    let thumb_rows = |app: &mut App| -> Vec<u16> {
-        use ratatui::{Terminal, backend::TestBackend};
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal.draw(|f| crate::ui::draw(f, app)).unwrap();
-        let buffer = terminal.backend().buffer();
-        (0..24)
-            .filter(|&y| {
-                buffer[(79, y)].symbol() == "│" && buffer[(79, y)].fg == crate::theme::text()
-            })
-            .collect()
-    };
-    let near_top = thumb_rows(&mut app);
-    assert!(!near_top.is_empty(), "the hidden rows show a scrollbar");
+    let (mut app, _rx) = explain_scrolled_into_tall_finding(&message, 0).await;
+    let tall = app.explain_state.selected();
+    let top = screen_text(&mut app, 80, 24);
     for _ in 0..15 {
         app.handle_key(press(KeyCode::Char('j'))).unwrap();
-        thumb_rows(&mut app);
+        screen_text(&mut app, 80, 24);
     }
-    let further_down = thumb_rows(&mut app);
-    assert!(
-        further_down[0] > near_top[0],
-        "the thumb moves with the rows"
+    assert_eq!(app.explain_state.selected(), tall);
+    assert_ne!(
+        screen_text(&mut app, 80, 24),
+        top,
+        "the finding's rows scroll"
     );
 }
 
@@ -29868,9 +29996,9 @@ async fn missing_node_metrics_stay_distinct_in_render_capture_and_sort() {
         }
         app.handle_key(press(KeyCode::Enter)).unwrap();
         assert_eq!(app.display_headers()[app.sort_column.unwrap()], header);
-        assert_eq!(row_names(&app), ["unknown", "idle", "busy"], "{header}");
-        app.handle_key(press(KeyCode::Char('I'))).unwrap();
         assert_eq!(row_names(&app), ["busy", "idle", "unknown"], "{header}");
+        app.handle_key(press(KeyCode::Char('I'))).unwrap();
+        assert_eq!(row_names(&app), ["unknown", "idle", "busy"], "{header}");
 
         let (headers, rows) = app.snapshot_table();
         let cell = |name: &str, header: &str| {
@@ -29889,7 +30017,7 @@ async fn missing_node_metrics_stay_distinct_in_render_capture_and_sort() {
             assert_eq!(cell("idle", metric), value);
         }
 
-        app.handle_key(press(KeyCode::End)).unwrap();
+        app.handle_key(press(KeyCode::Home)).unwrap();
         let fields = app.selected_row_fields();
         for metric in ["CPU", "MEM", "%CPU", "%MEM"] {
             assert_eq!(fields.iter().find(|(key, _)| key == metric).unwrap().1, "-");
@@ -30279,6 +30407,8 @@ async fn event_last_seen_sorts_recent_occurrences_and_advances_with_time() {
             app.handle_key(press(KeyCode::Char(ch))).unwrap();
         }
         app.handle_key(press(KeyCode::Enter)).unwrap();
+        assert_eq!(row_names(&app), ["single", "repeat"]);
+        app.handle_key(press(KeyCode::Char('I'))).unwrap();
         assert_eq!(row_names(&app), ["repeat", "single"]);
         let idx = app
             .display_headers()
@@ -30991,7 +31121,10 @@ async fn namespace_views_follow_navigation_bookmarks_and_wide_mode() {
     }];
     app.handle_key(press(KeyCode::Char('z'))).unwrap();
     assert_eq!(app.namespace, "python");
-    assert_eq!(app.display_headers().to_vec(), ["NAME", "CPU", "MEM"]);
+    assert_eq!(
+        app.display_headers().to_vec(),
+        ["NAME", "%CPU/R", "CPU", "%MEM/R", "MEM"]
+    );
     assert!(app.sort_column.is_none());
     palette(&mut app, "pods other");
     assert!(app.display_headers().contains(&"OWNER".to_string()));
@@ -31396,9 +31529,9 @@ async fn configured_metric_columns_keep_order_values_and_live_filters() {
         app.handle_key(press(KeyCode::Char(c))).unwrap();
     }
     app.handle_key(press(KeyCode::Enter)).unwrap();
-    assert_eq!(row_names(&app), ["api", "worker"]);
-    metrics(&mut app, 4200);
     assert_eq!(row_names(&app), ["worker", "api"]);
+    metrics(&mut app, 4200);
+    assert_eq!(row_names(&app), ["api", "worker"]);
     app.handle_msg(Msg::Metrics {
         generation: app.generation,
         data: HashMap::new(),
@@ -31566,7 +31699,7 @@ async fn metric_overlay_retains_defaults_and_filters_percent_headers() {
     assert_eq!(
         app.display_headers().to_vec(),
         [
-            "NAME", "READY", "STATUS", "RESTARTS", "%CPU/R", "AGE", "CPU", "MEM"
+            "NAME", "READY", "STATUS", "CPU", "%MEM/R", "MEM", "RESTARTS", "%CPU/R", "AGE"
         ]
     );
     apply(
@@ -31638,7 +31771,7 @@ async fn builtin_aliases_keep_numeric_sort_and_elapsed_values() {
         app.handle_key(press(KeyCode::Char(c))).unwrap();
     }
     app.handle_key(press(KeyCode::Enter)).unwrap();
-    assert_eq!(row_names(&app), ["worker", "api"]);
+    assert_eq!(row_names(&app), ["api", "worker"]);
     let now = "2025-01-01T00:01:00Z"
         .parse::<Timestamp>()
         .unwrap()
@@ -31761,16 +31894,9 @@ async fn hide_header_reloads_and_keeps_command_input_in_compact_mode() {
         .unwrap();
     let hidden = app.table_hit.borrow().clone().unwrap();
     assert!(app.hide_header);
-    assert_eq!(hidden.header_y + 7, normal.header_y);
-    assert_eq!(hidden.rows_h, normal.rows_h + 7);
-    let screen: String = terminal
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    assert!(screen.contains("y:yaml"), "{screen}");
+    assert_eq!(hidden.header_y + 5, normal.header_y);
+    // A hidden header moves its flash to the status row, so 4 rows net.
+    assert_eq!(hidden.rows_h, normal.rows_h + 4);
 
     app.handle_key(ctrl(KeyCode::Char('e'))).unwrap();
     terminal
@@ -31851,8 +31977,9 @@ async fn compact_startup_preference_preserves_session_toggles() {
         .draw(|frame| crate::ui::draw(frame, &mut app))
         .unwrap();
     let full = app.table_hit.borrow().clone().unwrap();
-    assert_eq!(full.header_y, compact.header_y + 6);
-    assert_eq!(compact.rows_h, full.rows_h + 8);
+    assert_eq!(full.header_y, compact.header_y + 4);
+    // The full layout lists key hints and the flash in the header, so it adds no bottom row.
+    assert_eq!(compact.rows_h, full.rows_h + 4);
 
     land_context(&mut app, "dev");
     palette(&mut app, "reload");
@@ -32420,9 +32547,9 @@ async fn quantity_formats_sort_and_filter_before_display_rounding() {
             app.handle_key(press(KeyCode::Char(key))).unwrap();
         }
         app.handle_key(press(KeyCode::Enter)).unwrap();
-        assert_eq!(row_names(&app), ["z-low", "a-high"]);
-        app.handle_key(press(KeyCode::Char('I'))).unwrap();
         assert_eq!(row_names(&app), ["a-high", "z-low"]);
+        app.handle_key(press(KeyCode::Char('I'))).unwrap();
+        assert_eq!(row_names(&app), ["z-low", "a-high"]);
     }
     for filter in [
         "cpu/a>1.00015",
@@ -32671,6 +32798,7 @@ async fn fallback_paths_render_sort_filter_and_refresh_selected_values() {
         app.handle_key(press(KeyCode::Char(key))).unwrap();
     }
     app.handle_key(press(KeyCode::Enter)).unwrap();
+    app.handle_key(press(KeyCode::Char('I'))).unwrap();
     assert_eq!(row_names(&app), ["z-low", "a-high", "m-missing"]);
     type_filter(&mut app, "nodepool=fallback");
     assert_eq!(row_names(&app), ["z-low"]);
@@ -32754,6 +32882,7 @@ page_up = ["pageup", "ctrl-b", "ctrl-u"]
 page_down = ["pagedown", "ctrl-f", "ctrl-d"]
 [keys.table]
 delete = "alt-d"
+rollout_history = "alt-u"
 "#;
 
 fn use_keys(app: &mut App, text: &str) {
@@ -33206,7 +33335,7 @@ async fn help_highlights_search_phrases_across_wrapped_rows() {
 }
 
 #[tokio::test]
-async fn custom_keys_are_visible_in_help_header_and_footer() {
+async fn custom_keys_are_visible_in_help_and_header() {
     use ratatui::{Terminal, backend::TestBackend};
     let (mut app, _rx) = test_app();
     app.switch_kind("pods");
@@ -33226,10 +33355,6 @@ async fn custom_keys_are_visible_in_help_header_and_footer() {
     let text = screen(&mut app, &mut terminal);
     assert!(text.contains("alt-d"), "{text}");
     assert!(text.contains("unbound yaml"), "{text}");
-    app.hide_header = true;
-    let text = screen(&mut app, &mut terminal);
-    assert!(text.contains("alt-d:delete"), "{text}");
-    assert!(text.contains("unbound:yaml"), "{text}");
     app.handle_key(press(KeyCode::Char('?'))).unwrap();
     app.handle_key(press(KeyCode::Char('/'))).unwrap();
     for c in "page down".chars() {
@@ -34096,7 +34221,7 @@ async fn header_lists_favorite_namespaces_with_their_keys() {
         "{row}"
     );
 
-    let row = namespace_row(&screen(&mut app, 70));
+    let row = namespace_row(&screen(&mut app, 44));
     assert!(row.contains("1 production"), "{row}");
     assert!(!row.contains("observability"), "{row}");
     assert!(row.contains('…'), "{row}");
@@ -34821,7 +34946,7 @@ async fn describe_initial_request_can_be_closed_without_late_content() {
 }
 
 #[tokio::test]
-async fn refresh_indicator_distinguishes_running_stopped_and_static_views() {
+async fn status_line_has_no_refresh_indicator() {
     use ratatui::{Terminal, backend::TestBackend};
     for compact in [false, true] {
         let (mut app, _rx) = app_with_pod();
@@ -34840,14 +34965,21 @@ async fn refresh_indicator_distinguishes_running_stopped_and_static_views() {
                 .map(|cell| cell.symbol())
                 .collect::<String>()
         };
+        let indicators = ["● live", "○ syncing", "○ static", "● refresh", "○ stopped"];
+        let mut shows_none = |app: &mut App| {
+            let screen = render(app);
+            !indicators.iter().any(|label| screen.contains(label))
+        };
+        assert!(shows_none(&mut app), "table");
         app.handle_key(press(KeyCode::Char('y'))).unwrap();
-        assert!(render(&mut app).contains("○ stopped"));
+        assert!(shows_none(&mut app), "document, refresh off");
         app.handle_key(press(KeyCode::Char('r'))).unwrap();
-        assert!(render(&mut app).contains("● refresh"));
+        assert!(app.refresh_task.is_some());
+        assert!(shows_none(&mut app), "document, refresh on");
         app.handle_key(press(KeyCode::Char('r'))).unwrap();
-        assert!(render(&mut app).contains("○ stopped"));
+        assert!(app.refresh_task.is_none());
         palette(&mut app, "info");
-        assert!(render(&mut app).contains("○ static"));
+        assert!(shows_none(&mut app), "static document");
         app.handle_key(press(KeyCode::Char('r'))).unwrap();
         assert!(app.refresh_task.is_none());
         assert!(app.flash.contains("unavailable"));
@@ -35157,19 +35289,10 @@ async fn popups_preserve_surrounding_cells_on_open_close_and_resize() {
 }
 
 #[tokio::test]
-async fn scrollbars_follow_keys_and_disappear_when_content_fits() {
+async fn scrolling_draws_no_scrollbar_on_view_borders() {
     use ratatui::{Terminal, backend::TestBackend};
     let (mut app, _rx) = test_app();
     app.compact = true;
-    let mut terminal = Terminal::new(TestBackend::new(60, 16)).unwrap();
-    let thumb_rows = |terminal: &Terminal<TestBackend>| -> Vec<u16> {
-        (0..16)
-            .filter(|&y| {
-                terminal.backend().buffer()[(59, y)].symbol() == "│"
-                    && terminal.backend().buffer()[(59, y)].fg == crate::theme::text()
-            })
-            .collect()
-    };
     for i in 0..80 {
         apply(
             &mut app,
@@ -35177,97 +35300,41 @@ async fn scrollbars_follow_keys_and_disappear_when_content_fits() {
             "metadata":{"name":format!("pod-{i:03}"), "namespace":"default"}}),
         );
     }
-    for mode in [
-        Mode::Table,
-        Mode::Detail,
-        Mode::Diff,
-        Mode::Logs,
-        Mode::Help,
-    ] {
+    let mut terminal = Terminal::new(TestBackend::new(60, 16)).unwrap();
+    for mode in [Mode::Table, Mode::Detail, Mode::Logs, Mode::Help] {
         app.mode = mode;
+        let lines: VecDeque<String> = (0..80)
+            .map(|i| format!("line {i} {}", "x".repeat(100)))
+            .collect();
         app.detail = Scrollable {
-            lines: (0..80).map(|i| format!("line {i}")).collect(),
+            lines: lines.clone(),
             ..Default::default()
         };
         app.logs.view = Scrollable {
-            lines: (0..80).map(|i| format!("line {i}")).collect(),
+            lines,
             ..Default::default()
         };
         app.logs.follow = false;
         terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-        app.handle_key(press(KeyCode::Home)).unwrap();
-        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-        let top = thumb_rows(&terminal);
-        assert!(!top.is_empty(), "{mode:?}");
-        app.handle_key(press(KeyCode::End)).unwrap();
-        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-        let bottom = thumb_rows(&terminal);
-        assert!(bottom[0] > top[0], "{mode:?}: {top:?} -> {bottom:?}");
-    }
-    app.mode = Mode::Detail;
-    for lines in [VecDeque::new(), VecDeque::from(["short".into()])] {
-        app.detail = Scrollable {
-            lines,
-            ..Default::default()
+        let borders = |terminal: &Terminal<TestBackend>| -> Vec<_> {
+            let buffer = terminal.backend().buffer();
+            (1..15)
+                .map(|y| (buffer[(59, y)].symbol().to_string(), buffer[(59, y)].fg))
+                .chain((1..59).map(|x| (buffer[(x, 15)].symbol().to_string(), buffer[(x, 15)].fg)))
+                .collect()
         };
-        app.handle_key(press(KeyCode::Home)).unwrap();
-        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-        assert!(thumb_rows(&terminal).is_empty());
+        let before = borders(&terminal);
+        for key in [
+            KeyCode::Down,
+            KeyCode::PageDown,
+            KeyCode::End,
+            KeyCode::Right,
+        ] {
+            app.handle_key(press(key)).unwrap();
+            terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+            assert_eq!(borders(&terminal), before, "{mode:?} after {key:?}");
+        }
     }
-    app.detail = Scrollable {
-        lines: VecDeque::from(["x".repeat(4000)]),
-        ..Default::default()
-    };
-    terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-    app.handle_key(press(KeyCode::Right)).unwrap();
-    terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-    assert!(app.detail.hscroll > 0);
-    assert!(
-        (1..59).any(|x| terminal.backend().buffer()[(x, 15)].symbol() == "─"
-            && terminal.backend().buffer()[(x, 15)].fg == crate::theme::text())
-    );
-    app.detail = Scrollable {
-        lines: VecDeque::from(["x".repeat(4000)]),
-        wrap: true,
-        ..Default::default()
-    };
-    terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-    app.handle_key(press(KeyCode::End)).unwrap();
-    terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-    assert!(thumb_rows(&terminal)[0] > 2);
-    for width in [1, 2, 3, 120] {
-        terminal.backend_mut().resize(width, 16);
-        crate::ui::resize(&mut terminal, &mut app).unwrap();
-    }
-}
-
-#[tokio::test]
-async fn document_scrollbar_thumb_matches_visible_fraction() {
-    use ratatui::{Terminal, backend::TestBackend};
-    let (mut app, _rx) = test_app();
-    app.compact = true;
-    app.mode = Mode::Detail;
-    let mut terminal = Terminal::new(TestBackend::new(60, 16)).unwrap();
-    terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-    let height = app.detail.viewport.as_ref().unwrap().height;
-    app.detail.lines = (0..height * 2).map(|i| format!("line {i}")).collect();
-    app.handle_key(press(KeyCode::Home)).unwrap();
-    terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-    let thumb_rows = |terminal: &Terminal<TestBackend>| -> Vec<u16> {
-        (0..16)
-            .filter(|&y| {
-                terminal.backend().buffer()[(59, y)].symbol() == "│"
-                    && terminal.backend().buffer()[(59, y)].fg == crate::theme::text()
-            })
-            .collect()
-    };
-    let top = thumb_rows(&terminal);
-    assert_eq!(top.len(), height.div_ceil(2));
-    app.handle_key(press(KeyCode::End)).unwrap();
-    terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-    let bottom = thumb_rows(&terminal);
-    assert_eq!(bottom.len(), top.len());
-    assert_eq!(usize::from(bottom.last().unwrap() - top[0]) + 1, height);
 }
 
 #[tokio::test]
@@ -35284,12 +35351,6 @@ async fn document_horizontal_scroll_uses_terminal_columns() {
         };
         app.handle_key(press(KeyCode::Home)).unwrap();
         terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-        assert_eq!(app.detail.scroll_dimensions(), (1, width));
-        let has_thumb = (1..59).any(|x| {
-            terminal.backend().buffer()[(x, 15)].symbol() == "─"
-                && terminal.backend().buffer()[(x, 15)].fg == crate::theme::text()
-        });
-        assert_eq!(has_thumb, width > 58);
         for _ in 0..100 {
             app.handle_key(press(KeyCode::Right)).unwrap();
         }
@@ -35299,111 +35360,12 @@ async fn document_horizontal_scroll_uses_terminal_columns() {
 }
 
 #[tokio::test]
-async fn scrollbars_hide_when_idle_and_return_on_keyboard_and_wheel_input() {
-    use crossterm::event::{MouseEvent, MouseEventKind};
-    use ratatui::{Terminal, backend::TestBackend};
+async fn capital_a_does_not_sort_by_age() {
     let (mut app, _rx) = test_app();
-    app.compact = true;
-    app.mode = Mode::Detail;
-    app.detail.lines = (0..80)
-        .map(|i| format!("line {i} {}", "x".repeat(100)))
-        .collect();
-    let mut terminal = Terminal::new(TestBackend::new(60, 16)).unwrap();
-    let has_thumb = |terminal: &Terminal<TestBackend>| {
-        (1..15).any(|y| terminal.backend().buffer()[(59, y)].fg == crate::theme::text())
-            || (1..59).any(|x| terminal.backend().buffer()[(x, 15)].fg == crate::theme::text())
-    };
-    terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-    assert!(!has_thumb(&terminal));
-    for key in [KeyCode::Down, KeyCode::PageDown, KeyCode::Right] {
-        app.handle_key(press(key)).unwrap();
-        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-        assert!(has_thumb(&terminal));
-        assert!(!app.expire_scrollbars());
-        app.scrollbar_activity =
-            Some(std::time::Instant::now() - std::time::Duration::from_millis(701));
-        app.handle_key(press(KeyCode::F(12))).unwrap();
-        assert!(app.expire_scrollbars());
-        assert!(!app.expire_scrollbars());
-        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-        assert!(!has_thumb(&terminal));
-    }
-    app.handle_mouse(MouseEvent {
-        kind: MouseEventKind::ScrollDown,
-        column: 10,
-        row: 5,
-        modifiers: KeyModifiers::NONE,
-    })
-    .unwrap();
-    terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-    assert!(has_thumb(&terminal));
-    app.handle_key(press(KeyCode::Esc)).unwrap();
-    assert!(!app.scrollbars_visible());
-}
-
-#[tokio::test]
-async fn age_shortcut_sorts_toggles_and_obeys_sort_memory() {
-    for remember in [true, false] {
-        let (mut app, _rx) = test_app();
-        app.remember_sort = remember;
-        palette(&mut app, "pods");
-        app.handle_key(press(KeyCode::Char('A'))).unwrap();
-        assert_eq!(app.display_headers()[app.sort_column.unwrap()], "AGE");
-        assert!(!app.sort_desc);
-        assert_eq!(app.mode, Mode::Table);
-        for (name, created) in [
-            ("a-old", "2020-01-01T00:00:00Z"),
-            ("z-new", "2025-01-01T00:00:00Z"),
-        ] {
-            apply(
-                &mut app,
-                json!({"apiVersion":"v1", "kind":"Pod", "metadata": {
-                    "name":name, "namespace":"default", "creationTimestamp":created
-                }}),
-            );
-        }
-        let names = |app: &App| {
-            app.rows()
-                .iter()
-                .map(|o| o.metadata.name.clone().unwrap())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(names(&app), ["z-new", "a-old"]);
-        app.handle_key(press(KeyCode::Char('A'))).unwrap();
-        assert!(app.sort_desc);
-        assert_eq!(names(&app), ["a-old", "z-new"]);
-        assert_eq!(
-            app.sort_memory.get("pods"),
-            remember.then(|| ("AGE".into(), true))
-        );
-        palette(&mut app, "deployments");
-        palette(&mut app, "pods");
-        assert_eq!(app.sort_column.is_some(), remember);
-        if remember {
-            assert!(app.sort_desc);
-            app.handle_key(press(KeyCode::Char('A'))).unwrap();
-            assert!(!app.sort_desc);
-        }
-    }
-}
-
-#[tokio::test]
-async fn age_shortcut_keeps_sort_when_age_is_absent() {
-    let (mut app, _rx) = test_app();
-    install_views(
-        &mut app,
-        r#"
-        [views.pods]
-        replace = true
-        columns = [{ name = "NAME", builtin = "NAME" }]
-    "#,
-    );
     palette(&mut app, "pods");
-    select_sort_with_keys(&mut app, "NAME");
     let sort = (app.sort_column, app.sort_desc);
     app.handle_key(press(KeyCode::Char('A'))).unwrap();
     assert_eq!((app.sort_column, app.sort_desc), sort);
-    assert_eq!(app.flash, "view has no AGE column");
     assert_eq!(app.mode, Mode::Table);
 }
 
@@ -35714,13 +35676,12 @@ async fn document_fullscreen_layout_and_prompts_follow_keys() {
                 .collect::<Vec<_>>()
         };
         let normal = render(&mut app, &mut terminal);
-        assert!(normal[0].contains("sofka"));
+        assert!(normal[0].contains("Context:"));
         assert!(!app.document_fullscreen);
         app.handle_key(press(KeyCode::Char('F'))).unwrap();
         app.handle_key(press(KeyCode::Down)).unwrap();
         let full = render(&mut app, &mut terminal);
         assert!(app.document_fullscreen);
-        assert!(app.scrollbars_visible());
         assert!(full[0].contains("document title"));
         assert!(full[1].starts_with("line 01 "));
         assert!(full[19].starts_with("line 19 "));
@@ -35758,7 +35719,7 @@ async fn document_fullscreen_layout_and_prompts_follow_keys() {
         assert_eq!(render(&mut app, &mut terminal), full);
         app.handle_key(press(KeyCode::Char('F'))).unwrap();
         assert!(!app.document_fullscreen);
-        assert!(render(&mut app, &mut terminal)[0].contains("sofka"));
+        assert!(render(&mut app, &mut terminal)[0].contains("Context:"));
         app.handle_key(press(KeyCode::Char('F'))).unwrap();
         app.handle_key(press(KeyCode::Char('/'))).unwrap();
         app.handle_key(press(KeyCode::Char('x'))).unwrap();
@@ -35768,7 +35729,7 @@ async fn document_fullscreen_layout_and_prompts_follow_keys() {
         assert!(app.detail.filter.is_empty());
         app.handle_key(press(KeyCode::Esc)).unwrap();
         assert_eq!(app.mode, Mode::Table);
-        assert!(render(&mut app, &mut terminal)[0].contains("sofka"));
+        assert!(render(&mut app, &mut terminal)[0].contains("Context:"));
     }
 }
 
@@ -36001,9 +35962,72 @@ async fn pod_header_keeps_action_columns_aligned() {
             })
             .unwrap()
     };
-    assert_eq!(position("l logs").0, position("t transfer").0);
-    assert_eq!(position("p prev logs").0, position("f port-fwd").0);
-    assert_eq!(position("p prev logs").0, position("ctrl-d delete").0);
+    assert_eq!(position("l logs").0, position("s shell").0);
+    assert_eq!(position("L cloud logs").0, position("f port-fwd").0);
+    assert_eq!(position("L cloud logs").0, position("t transfer").0);
+    assert_eq!(position("L cloud logs").0, position("ctrl-d delete").0);
+}
+
+#[tokio::test]
+async fn header_shows_cloud_logs_on_every_kind_that_supports_it() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let (mut app, _rx) = test_app();
+    for kind in [
+        "pods",
+        "deployments",
+        "statefulsets",
+        "daemonsets",
+        "replicasets",
+        "jobs",
+        "cronjobs",
+        "services",
+        "namespaces",
+        "nodes",
+    ] {
+        app.switch_kind(kind);
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let header: String = (0..8)
+            .map(|y| {
+                (0..160)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect();
+        assert!(header.contains("L cloud logs"), "{kind}: {header}");
+    }
+}
+
+#[tokio::test]
+async fn header_hints_leave_out_enter() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let (mut app, _rx) = test_app();
+    // `cronjobs` has no arm of its own, so it covers the default hints.
+    for kind in [
+        "pods",
+        "deployments",
+        "services",
+        "namespaces",
+        "nodes",
+        "cronjobs",
+    ] {
+        app.switch_kind(kind);
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let header: String = (0..8)
+            .map(|y| {
+                (0..160)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect();
+        assert!(!header.contains("enter"), "{kind}: {header}");
+        if kind == "cronjobs" {
+            assert!(header.contains("y yaml"), "{kind}: {header}");
+        }
+    }
 }
 
 #[tokio::test]
@@ -36052,8 +36076,8 @@ async fn container_spacing_preserves_wrapped_details_at_height_limit() {
         .skip_while(|line| !line.contains("Container:"))
         .map(|line| line.trim().to_owned())
         .collect();
-    // Reserve nine outer rows, three popup rows, and three container rows.
-    let minimum_height = 9 + 3 + 3 + expected.len() as u16;
+    // Reserve five outer rows, three popup rows, and three container rows.
+    let minimum_height = 5 + 3 + 3 + expected.len() as u16;
     for extra in [0, 1] {
         let lines = render_container_popup(&mut app, 50, minimum_height + extra);
         let start = lines

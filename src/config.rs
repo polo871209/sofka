@@ -73,7 +73,7 @@ pub struct Config {
     pub readonly: bool,
     /// Experimental features, disabled unless explicitly enabled.
     pub experimental: Experimental,
-    /// Hide the header, including the logo. Defaults to false.
+    /// Hide the header. Defaults to false.
     pub hide_header: bool,
     /// Start in compact mode; runtime toggles survive reloads and context switches.
     pub compact_mode: bool,
@@ -1283,7 +1283,7 @@ pub fn workspace_warnings(workspaces: &[Workspace]) -> Vec<String> {
 /// A declarative safety policy: match dangerous actions by context, namespace,
 /// resource, and action, then require extra confirmation, deny them, or cap a
 /// bulk selection. Gates `delete`, `force-delete`, `drain`, `restart`,
-/// `shell`, `debug`, `node-debug`, `transfer`, `prune`, `pvc-explore`, and
+/// `rollback`, `shell`, `debug`, `node-debug`, `transfer`, `prune`, `pvc-explore`, and
 /// `pvc-upload` today. Empty match lists mean "any"; glob `*` supported.
 ///
 /// ```toml
@@ -1313,7 +1313,7 @@ pub struct Guardrail {
     /// Resource plurals/kinds this applies to (globs). Empty = any.
     pub resources: Vec<String>,
     /// Actions this applies to: `delete`, `force-delete`, `drain`, `restart`,
-    /// `shell`, `debug`, `node-debug`, `transfer`, `prune` (an Argo CD
+    /// `rollback`, `shell`, `debug`, `node-debug`, `transfer`, `prune` (an Argo CD
     /// Application sync with prune), `pvc-explore` (creating or sweeping a
     /// PVC-explore helper pod), `pvc-upload`. Empty = any.
     pub actions: Vec<String>,

@@ -1,19 +1,6 @@
 use super::*;
 
 impl App {
-    pub fn scrollbars_visible(&self) -> bool {
-        self.scrollbar_activity
-            .is_some_and(|time| time.elapsed() < std::time::Duration::from_millis(700))
-    }
-
-    pub fn expire_scrollbars(&mut self) -> bool {
-        if self.scrollbar_activity.is_some() && !self.scrollbars_visible() {
-            self.scrollbar_activity = None;
-            return true;
-        }
-        false
-    }
-
     // ----- key handling --------------------------------------------------
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -50,30 +37,10 @@ impl App {
         let run = self.plugin_run;
         let input_mode = self.mode;
         let prompt_len = self.prompt_input.len();
-        let scroll_action = matches!(
-            key.action,
-            Some(
-                Action::Up
-                    | Action::Down
-                    | Action::Left
-                    | Action::Right
-                    | Action::First
-                    | Action::Last
-                    | Action::PageUp
-                    | Action::PageDown
-                    | Action::RangeUp
-                    | Action::RangeDown
-                    | Action::NextMatch
-                    | Action::PreviousMatch
-            )
-        );
         let result = self.handle_key_inner(key);
         if self.mode != input_mode {
             self.popup_scroll = 0;
             self.popup_max_scroll = 0;
-            self.scrollbar_activity = None;
-        } else if scroll_action {
-            self.scrollbar_activity = Some(std::time::Instant::now());
         }
         if self.mode == Mode::Prompt && self.prompt_input.len() != prompt_len {
             self.popup_scroll = usize::MAX;
@@ -450,6 +417,7 @@ impl App {
             }
             (Some(Action::Attach), _) => self.request_attach(),
             (Some(Action::SetImage), _) => self.request_set_image(),
+            (Some(Action::RolloutHistory), _) => self.open_rollout_history(),
             (Some(Action::Node), _) => self.show_node(),
             (Some(Action::CopyName), _) => self.copy_name(),
             // Copy any displayed cell of the row via a field picker (`c`
@@ -467,7 +435,6 @@ impl App {
             (Some(Action::Drain), _) => self.request_drain(),
             // Sorting: S opens the column picker, I inverts the direction.
             (Some(Action::Sort), _) => self.open_sort_picker(),
-            (Some(Action::SortAge), _) => self.sort_by_age(),
             (Some(Action::InvertSort), _) => self.toggle_sort_dir(),
             // Wide mode: show wide-only columns (kubectl `-o wide`).
             (Some(Action::Wide), _) => self.toggle_wide(),

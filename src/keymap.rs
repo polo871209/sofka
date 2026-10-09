@@ -112,13 +112,13 @@ actions! {
     Refresh => ("refresh", "refresh"),
     Rename => ("rename", "rename"),
     RestartOrRefresh => ("restart_or_refresh", "restart, sync, rollback, or refresh"),
+    RolloutHistory => ("rollout_history", "rollout history and rollback"),
     Right => ("right", "right"),
     Save => ("save", "save"),
     SetImage => ("set_image", "set image"),
     Shell => ("shell", "shell"),
     ShellOrScale => ("shell_or_scale", "shell or scale through /scale"),
     Sort => ("sort", "sort"),
-    SortAge => ("sort_age", "sort by age; repeat to invert"),
     Start => ("start", "start"),
     Stream => ("stream", "stream"),
     SwitchPane => ("switch_pane", "switch pane"),
@@ -155,6 +155,7 @@ impl Action {
             Self::PortForward => Some(&["pods", "services"]),
             Self::Inspect => Some(&["secrets", "persistentvolumeclaims"]),
             Self::Cordon | Self::Uncordon | Self::Drain => Some(&["nodes"]),
+            Self::RolloutHistory => Some(&["deployments", "statefulsets", "daemonsets"]),
             Self::SetImage => Some(&[
                 "pods",
                 "deployments",
@@ -591,11 +592,11 @@ const DEFAULTS: &[(&str, Action, &[&str])] = &[
     ("table", Action::ProviderLogs, &["L"]),
     ("table", Action::Refresh, &["ctrl-r"]),
     ("table", Action::RestartOrRefresh, &["r"]),
+    ("table", Action::RolloutHistory, &["ctrl-u"]),
     ("table", Action::Right, &["right"]),
     ("table", Action::SetImage, &["i"]),
     ("table", Action::ShellOrScale, &["s"]),
     ("table", Action::Sort, &["S"]),
-    ("table", Action::SortAge, &["A"]),
     ("table", Action::Timeline, &["T"]),
     ("table", Action::Uncordon, &["U"]),
     ("table", Action::Up, &["k", "up"]),
@@ -1120,7 +1121,11 @@ mod tests {
         assert!(errors.contains("ctrl-d"), "{errors}");
         assert!(errors.contains("delete"), "{errors}");
         assert!(errors.contains("page_down"), "{errors}");
-        let map = compile(&format!("{text}\n[keys.table]\ndelete = 'alt-d'\n")).unwrap();
+        assert!(errors.contains("rollout_history"), "{errors}");
+        let map = compile(&format!(
+            "{text}\n[keys.table]\ndelete = 'alt-d'\nrollout_history = 'alt-u'\n"
+        ))
+        .unwrap();
         for scope in ["table", "detail", "diff", "events", "help", "logs"] {
             assert_eq!(
                 map.action(
@@ -1142,7 +1147,6 @@ mod tests {
     #[test]
     fn resource_and_log_shortcuts_support_overrides_and_conflicts() {
         for (scope, action, default, custom) in [
-            ("table", Action::SortAge, 'A', "f8"),
             ("table", Action::NamespaceSelected, 'W', "f9"),
             ("logs", Action::LogMarker, 'm', "f10"),
         ] {
@@ -1218,7 +1222,8 @@ mod tests {
                 "{text}"
             );
         }
-        let map = compile("[keys.table]\npage_up = ['ctrl-u', 'control-U']").unwrap();
+        let map = compile("[keys.table]\npage_up = ['ctrl-u', 'control-U']\nrollout_history = []")
+            .unwrap();
         assert_eq!(map.chords("table", Action::PageUp).len(), 1);
     }
 
