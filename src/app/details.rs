@@ -44,6 +44,7 @@ impl App {
                 Some(rel) => {
                     self.detail = Scrollable {
                         wrap: self.detail.wrap,
+                        syntax: Syntax::Yaml,
                         title: format!("{} v{} — manifest", rel.name, rel.revision),
                         yaml: true,
                         lines: rel.manifest.lines().map(String::from).collect(),
@@ -75,6 +76,7 @@ impl App {
         object.metadata.managed_fields = None;
         self.detail = Scrollable {
             wrap: self.detail.wrap,
+            syntax: Syntax::Yaml,
             title: format!("{title} — YAML"),
             yaml: true,
             lines: self.object_yaml(&object).into(),

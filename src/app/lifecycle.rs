@@ -456,7 +456,14 @@ impl App {
         let kind = self.watched_plural(&key).to_string();
         self.timeline
             .observe_as(&self.kind_plural, &kind, &key, prev.map(Arc::as_ref), &obj);
+        // `:diff` reads the annotation first, so a copy kept for an
+        // annotated object is never read and only pins memory.
+        let has_last_applied =
+            obj.metadata.annotations.as_ref().is_some_and(|a| {
+                a.contains_key("kubectl.kubernetes.io/last-applied-configuration")
+            });
         if let Some(prev) = prev
+            && !has_last_applied
             && prev.metadata.resource_version != obj.metadata.resource_version
         {
             // An `Arc` bump, not a deep copy of the object's whole
@@ -1912,12 +1919,14 @@ impl App {
                     .is_some_and(|(id, _)| *id == claim) =>
             {
                 self.describe_task = None;
-                if warn.is_some()
-                    && let Some(source) = self.document_source.as_mut()
-                {
-                    source.view = refresh::RefreshView::Yaml {
-                        managed_fields: false,
-                    };
+                // A failed describe falls back to YAML, now or on the next refresh.
+                if warn.is_some() {
+                    self.detail.syntax = Syntax::Yaml;
+                    if let Some(source) = self.document_source.as_mut() {
+                        source.view = refresh::RefreshView::Yaml {
+                            managed_fields: false,
+                        };
+                    }
                 }
                 self.detail.yaml = warn.is_some();
                 self.detail.title = title;

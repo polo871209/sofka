@@ -636,26 +636,37 @@ pub fn build_spec(
         && group.is_empty()
         && matches!(plural, "pods" | "nodes")
     {
-        let mut defaults = Vec::new();
-        if plural == "nodes" {
-            defaults.push(("PODS", MetricColumn::NodePods));
-        }
-        defaults.extend([("CPU", MetricColumn::Cpu), ("MEM", MetricColumn::Memory)]);
-        if plural == "nodes" {
-            defaults.extend([
+        let defaults: &[(&str, MetricColumn)] = if plural == "nodes" {
+            &[
+                ("PODS", MetricColumn::NodePods),
+                ("CPU", MetricColumn::Cpu),
+                ("MEM", MetricColumn::Memory),
                 ("%CPU", MetricColumn::NodeCpuUtilization),
                 ("%MEM", MetricColumn::NodeMemoryUtilization),
                 ("%CPU/R", MetricColumn::NodeRequest("cpu")),
                 ("%MEM/R", MetricColumn::NodeRequest("memory")),
                 ("%CPU/L", MetricColumn::NodeLimit("cpu")),
                 ("%MEM/L", MetricColumn::NodeLimit("memory")),
-            ]);
-        }
-        for (header, metric) in defaults {
+            ]
+        } else {
+            &[
+                ("%CPU/R", MetricColumn::CpuRequestUtilization),
+                ("CPU", MetricColumn::Cpu),
+                ("%MEM/R", MetricColumn::MemoryRequestUtilization),
+                ("MEM", MetricColumn::Memory),
+            ]
+        };
+        // Pods show usage right after STATUS, so RESTARTS and AGE come last. Nodes append.
+        let mut at = (plural == "pods").then(|| {
+            cols.iter()
+                .position(|c| c.is_status)
+                .map_or(cols.len(), |i| i + 1)
+        });
+        for &(header, metric) in defaults {
             if cols.iter().any(|c| c.header == header || matches!(&c.source, SpecSource::User(uc) if uc.kind == crate::views::ColumnKind::Metric(metric))) {
                 continue;
             }
-            cols.push(spec_user(&crate::views::UserColumn {
+            let column = spec_user(&crate::views::UserColumn {
                 header: header.into(),
                 pointer: String::new(),
                 fallback_pointers: Vec::new(),
@@ -667,7 +678,14 @@ pub fn build_spec(
                 condition_field: None,
                 default: None,
                 regex: None,
-            }));
+            });
+            match at.as_mut() {
+                Some(i) => {
+                    cols.insert(*i, column);
+                    *i += 1;
+                }
+                None => cols.push(column),
+            }
         }
     }
     cols.retain(|c| wide || !c.wide);
@@ -761,6 +779,11 @@ impl ViewSpec {
             }
             _ => None,
         }
+    }
+
+    /// The header of the column whose value tints the row.
+    pub fn status_header(&self) -> Option<&str> {
+        Some(&self.columns.get(self.status_idx?)?.header)
     }
 
     pub fn canonical_header(&self, idx: usize) -> Option<&str> {
@@ -1208,6 +1231,31 @@ impl WorkloadCounts {
             },
         }
     }
+}
+
+/// Whether a pod's Ready condition, or one of its readiness gates, is not yet True.
+pub fn pod_readiness_blocked(obj: &DynamicObject) -> bool {
+    let conditions = obj
+        .data
+        .pointer("/status/conditions")
+        .and_then(serde_json::Value::as_array);
+    let condition = |name: &str| {
+        conditions
+            .and_then(|conditions| conditions.iter().find(|c| c["type"].as_str() == Some(name)))
+    };
+    condition("Ready").is_some_and(|c| c["status"].as_str() != Some("True"))
+        || obj
+            .data
+            .pointer("/spec/readinessGates")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|gates| {
+                gates.iter().any(|gate| {
+                    gate["conditionType"]
+                        .as_str()
+                        .and_then(condition)
+                        .is_none_or(|c| c["status"].as_str() != Some("True"))
+                })
+            })
 }
 
 /// Rollout-health summary for workload kinds, derived from the object's own
@@ -4138,7 +4186,8 @@ mod tests {
         assert_eq!(
             spec.headers(),
             vec![
-                "NAME", "READY", "STATUS", "RESTARTS", "NODE-IP", "AGE", "CPU", "MEM"
+                "NAME", "READY", "STATUS", "%CPU/R", "CPU", "%MEM/R", "MEM", "RESTARTS", "NODE-IP",
+                "AGE"
             ]
         );
         let o = obj(json!({
@@ -4148,7 +4197,7 @@ mod tests {
         }));
         let (cells, status_idx) = spec.cells(&o, now_secs());
         assert_eq!(cells[2], "Running");
-        assert_eq!(cells[4], "10.0.0.9");
+        assert_eq!(cells[8], "10.0.0.9");
         assert_eq!(status_idx, Some(2));
     }
 
@@ -4163,7 +4212,10 @@ mod tests {
             true,
         );
         let spec = build_spec("", "pods", Some(&v), None, true);
-        assert_eq!(spec.headers(), vec!["NAME", "PHASE", "CPU", "MEM"]);
+        assert_eq!(
+            spec.headers(),
+            vec!["NAME", "PHASE", "%CPU/R", "CPU", "%MEM/R", "MEM"]
+        );
     }
 
     #[test]
@@ -4171,13 +4223,16 @@ mod tests {
         let narrow = build_spec("", "pods", None, None, false);
         assert_eq!(
             narrow.headers(),
-            vec!["NAME", "READY", "STATUS", "RESTARTS", "AGE", "CPU", "MEM"]
+            vec![
+                "NAME", "READY", "STATUS", "%CPU/R", "CPU", "%MEM/R", "MEM", "RESTARTS", "AGE"
+            ]
         );
         let wide = build_spec("", "pods", None, None, true);
         assert_eq!(
             wide.headers(),
             vec![
-                "NAME", "READY", "STATUS", "RESTARTS", "IP", "NODE", "AGE", "CPU", "MEM"
+                "NAME", "READY", "STATUS", "%CPU/R", "CPU", "%MEM/R", "MEM", "RESTARTS", "IP",
+                "NODE", "AGE"
             ]
         );
     }
@@ -4196,7 +4251,9 @@ mod tests {
         let spec = build_spec("", "pods", None, Some(&crd), false);
         assert_eq!(
             spec.headers(),
-            vec!["NAME", "READY", "STATUS", "RESTARTS", "AGE", "CPU", "MEM"]
+            vec![
+                "NAME", "READY", "STATUS", "%CPU/R", "CPU", "%MEM/R", "MEM", "RESTARTS", "AGE"
+            ]
         );
         // Explicit user view outranks printer columns.
         let user = view(
@@ -4259,7 +4316,7 @@ mod tests {
             Some(Cow::Borrowed("pod-a"))
         ));
         assert!(matches!(
-            spec.cell_at(&pod, 4, now_secs()),
+            spec.cell_at(&pod, 8, now_secs()),
             Some(Cow::Borrowed("10.0.0.7"))
         ));
         assert!(matches!(

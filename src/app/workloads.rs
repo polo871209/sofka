@@ -182,7 +182,6 @@ impl App {
                             | Action::ToggleOwned
                             | Action::Back
                             | Action::Sort
-                            | Action::SortAge
                             | Action::InvertSort
                             | Action::Wide
                             | Action::Namespaces

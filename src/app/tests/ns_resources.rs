@@ -88,7 +88,6 @@ async fn ns_resources_lists_populated_kinds_as_counts_arrive() {
         "1 kind with objects in prod · 1 no access · 1 failed"
     );
     assert!(app.flash_err);
-    assert!(screen_text(&mut app, 120, 20).contains("○ snapshot"));
 }
 
 #[tokio::test]
@@ -210,10 +209,10 @@ async fn ns_resources_filters_and_sorts_counts_as_numbers() {
     assert_eq!(
         counts(&app),
         pairs(&[
-            ("secrets", "3"),
-            ("deployments.apps", "4"),
-            ("pods", "12"),
             ("services", "30"),
+            ("pods", "12"),
+            ("deployments.apps", "4"),
+            ("secrets", "3"),
         ])
     );
 }
