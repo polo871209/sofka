@@ -537,7 +537,15 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         context_line,
         namespace_line,
         field("Resource:", kind, theme::peach()),
-        field("Count:", app.store.len().to_string(), theme::text()),
+        field(
+            "Count:",
+            if app.store.loading() {
+                "loading…".to_string()
+            } else {
+                app.store.len().to_string()
+            },
+            theme::text(),
+        ),
         flash_line(app, ""),
     ];
 
