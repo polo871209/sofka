@@ -551,7 +551,12 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     for span in favorite_namespace_spans(app, favorites_width) {
         namespace_line.push_span(span);
     }
-    let mut count_line = field("Count:", app.store.len().to_string(), theme::text());
+    let count = if app.store.loading() {
+        "loading…".to_string()
+    } else {
+        app.store.len().to_string()
+    };
+    let mut count_line = field("Count:", count, theme::text());
     if app.watch_polling {
         count_line.push_span(Span::styled(
             format!("  {}", polling_label()),

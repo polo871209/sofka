@@ -56,7 +56,7 @@ fn pairs(rows: &[(&str, &str)]) -> Vec<(String, String)> {
 }
 
 #[tokio::test]
-async fn ns_resources_lists_populated_kinds_as_counts_arrive() {
+async fn ns_resources_lists_populated_kinds_once_counting_finishes() {
     let (mut app, _rx) = test_app();
     let claim = open(&mut app, "prod");
     assert_eq!(app.namespace, "prod");
@@ -66,7 +66,7 @@ async fn ns_resources_lists_populated_kinds_as_counts_arrive() {
     assert!(app.flash.contains("counting resources in prod"));
 
     counted(&mut app, claim, "deployments", objects(4));
-    assert_eq!(counts(&app), pairs(&[("deployments.apps", "4")]));
+    assert!(counts(&app).is_empty());
     assert!(app.flash.contains("1/4 kinds"), "{}", app.flash);
     counted(&mut app, claim, "services", objects(0));
     counted(&mut app, claim, "secrets", Count::NoAccess);

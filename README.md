@@ -14,3 +14,4 @@ mise up github:polo871209/sofka
 - Jump to Cloud logging panel
 - Yaml syntax highlight
 - Default custom sort
+- Show a resource list only after it fully loads

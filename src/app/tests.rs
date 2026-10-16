@@ -667,7 +667,8 @@ async fn refresh_keeps_pod_updates_and_deletes_working_with_gzip_available() {
         .await
         .expect("watch event timeout");
         match event {
-            "ADDED" => assert!(app.store.get("default/a").is_some()),
+            "ADDED" => assert!(app.store.get("default/a").is_none()),
+            "BOOKMARK" => assert!(app.store.get("default/a").is_some()),
             "MODIFIED" => assert_eq!(
                 app.store.get("default/a").unwrap().data["status"]["phase"],
                 "Running"
@@ -21815,19 +21816,22 @@ async fn buffered_relist_updates_do_not_invalidate_visible_rows_until_swap() {
 }
 
 #[tokio::test]
-async fn first_visit_still_streams_rows_progressively() {
+async fn first_visit_shows_rows_only_after_the_initial_list() {
     let (mut app, _rx) = test_app();
     app.switch_kind("pods");
     app.handle_msg(Msg::Reset {
         generation: app.generation,
     });
     apply(&mut app, pod("a"));
-    assert_eq!(
-        app.store.len(),
-        1,
-        "with nothing on screen, rows appear as they stream in"
-    );
-    assert!(!app.store.synced);
+    apply(&mut app, pod("b"));
+    assert_eq!(app.row_count(), 0);
+    assert!(screen_text(&mut app, 120, 20).contains("Count:      loading…"));
+
+    app.handle_msg(Msg::Synced {
+        generation: app.generation,
+    });
+    assert_eq!(app.row_count(), 2);
+    assert!(screen_text(&mut app, 120, 20).contains("Count:      2"));
 }
 
 #[tokio::test]

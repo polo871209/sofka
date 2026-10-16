@@ -659,9 +659,8 @@ pub struct Store {
     /// by a filter or sort change rather than by the store moving.
     version: u64,
     /// Fresh rows accumulating during a (re)list while `items` still shows the
-    /// previous set — a cached view snapshot or the pre-relist state. Swapped
-    /// in wholesale on `Synced`, so stale rows are replaced atomically instead
-    /// of the table blanking out while the initial list streams in.
+    /// previous set: a cached view snapshot, the pre-relist state, or nothing.
+    /// Swapped in wholesale on `Synced`, so the table never shows a partial list.
     pending: Option<Items>,
     pub synced: bool,
     namespace_pending: HashMap<String, Items>,
@@ -704,21 +703,17 @@ impl Store {
         std::mem::take(&mut self.items)
     }
 
-    /// Handle a watch (re)list starting. With rows on screen (a seeded cache
-    /// snapshot, or an established watch relisting) the incoming list is
-    /// buffered so they stay visible until `finish_sync` swaps it in; an empty
-    /// store keeps the old behavior of applying rows as they stream in.
-    /// Returns whether the visible items were cleared.
-    pub fn begin_reset(&mut self) -> bool {
+    /// Handle a watch (re)list starting. The incoming list is buffered, and
+    /// the rows on screen stay until `finish_sync` swaps it in.
+    pub fn begin_reset(&mut self) {
         self.version += 1;
         self.synced = false;
-        if self.items.is_empty() {
-            self.pending = None;
-            true
-        } else {
-            self.pending = Some(Items::default());
-            false
-        }
+        self.pending = Some(Items::default());
+    }
+
+    /// Whether a first list is streaming in with no rows to show yet.
+    pub fn loading(&self) -> bool {
+        self.items.is_empty() && (self.pending.is_some() || !self.namespace_pending.is_empty())
     }
 
     /// Mark the initial list complete, swapping in the buffered rows if a
@@ -960,8 +955,7 @@ mod tests {
         store.seed(seeded);
         advanced(&store, &mut last, "seed");
 
-        // Non-empty store, so this buffers rather than clearing.
-        assert!(!store.begin_reset(), "seeded store buffers the relist");
+        store.begin_reset();
         advanced(&store, &mut last, "begin_reset");
 
         store.apply("default/c".into(), pod("c"));

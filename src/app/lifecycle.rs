@@ -1280,12 +1280,7 @@ impl App {
                 if self.store.synced {
                     self.watch_reconnects = self.watch_reconnects.saturating_add(1);
                 }
-                // With rows on screen (cached snapshot or established watch)
-                // the store buffers the relist and keeps showing them; only a
-                // genuine clear invalidates what's rendered.
-                if self.store.begin_reset() {
-                    self.clear_rows_cache();
-                }
+                self.store.begin_reset();
             }
             Msg::Applied {
                 generation,
