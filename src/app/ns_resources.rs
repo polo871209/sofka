@@ -313,9 +313,7 @@ impl App {
             self.flash_warn(PATTERN_WARNING);
             return;
         }
-        if self.store.begin_reset() {
-            self.clear_rows_cache();
-        }
+        self.store.begin_reset();
         let claim = self.claim_status(format!("counting resources in {}…", self.namespace_label()));
         self.ns_resources.shown = self.flash.clone();
         self.tasks.push(tokio::spawn(run(
