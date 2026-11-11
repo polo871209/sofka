@@ -463,10 +463,21 @@ impl App {
         // for the session diff (`:diff` on objects with no
         // last-applied annotation).
         let prev = self.store.latest_in(partition, &key);
+        let completion_changed = self.completed_hidden()
+            && prev.is_some_and(|prev| {
+                super::rows::pod_succeeded(prev) != super::rows::pod_succeeded(&obj)
+            });
         let kind = self.watched_plural(&key).to_string();
         self.timeline
             .observe_as(&self.kind_plural, &kind, &key, prev.map(Arc::as_ref), &obj);
+        // `:diff` reads the annotation first, so a copy kept for an
+        // annotated object is never read and only pins memory.
+        let has_last_applied =
+            obj.metadata.annotations.as_ref().is_some_and(|a| {
+                a.contains_key("kubectl.kubernetes.io/last-applied-configuration")
+            });
         if let Some(prev) = prev
+            && !has_last_applied
             && prev.metadata.resource_version != obj.metadata.resource_version
         {
             // An `Arc` bump, not a deep copy of the object's whole
@@ -476,6 +487,7 @@ impl App {
         }
         match self.store.apply_in(partition, key.clone(), obj) {
             StoreMutation::Inserted => self.invalidate_row(&key),
+            StoreMutation::Updated if completion_changed => self.invalidate_row(&key),
             StoreMutation::Updated => self.invalidate_row_contents(&key),
             StoreMutation::Buffered | StoreMutation::Removed | StoreMutation::Unchanged => {}
         }
@@ -1307,12 +1319,7 @@ impl App {
                 if self.store.synced {
                     self.watch_reconnects = self.watch_reconnects.saturating_add(1);
                 }
-                // With rows on screen (cached snapshot or established watch)
-                // the store buffers the relist and keeps showing them; only a
-                // genuine clear invalidates what's rendered.
-                if self.store.begin_reset() {
-                    self.clear_rows_cache();
-                }
+                self.store.begin_reset();
             }
             Msg::Applied {
                 generation,
@@ -1950,12 +1957,14 @@ impl App {
                     .is_some_and(|(id, _)| *id == claim) =>
             {
                 self.describe_task = None;
-                if warn.is_some()
-                    && let Some(source) = self.document_source.as_mut()
-                {
-                    source.view = refresh::RefreshView::Yaml {
-                        managed_fields: false,
-                    };
+                // A failed describe falls back to YAML, now or on the next refresh.
+                if warn.is_some() {
+                    self.detail.syntax = Syntax::Yaml;
+                    if let Some(source) = self.document_source.as_mut() {
+                        source.view = refresh::RefreshView::Yaml {
+                            managed_fields: false,
+                        };
+                    }
                 }
                 self.detail.yaml = warn.is_some();
                 self.detail.title = title;

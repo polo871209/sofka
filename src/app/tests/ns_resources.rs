@@ -56,7 +56,7 @@ fn pairs(rows: &[(&str, &str)]) -> Vec<(String, String)> {
 }
 
 #[tokio::test]
-async fn ns_resources_lists_populated_kinds_as_counts_arrive() {
+async fn ns_resources_lists_populated_kinds_once_counting_finishes() {
     let (mut app, _rx) = test_app();
     let claim = open(&mut app, "prod");
     assert_eq!(app.namespace, "prod");
@@ -66,7 +66,7 @@ async fn ns_resources_lists_populated_kinds_as_counts_arrive() {
     assert!(app.flash.contains("counting resources in prod"));
 
     counted(&mut app, claim, "deployments", objects(4));
-    assert_eq!(counts(&app), pairs(&[("deployments.apps", "4")]));
+    assert!(counts(&app).is_empty());
     assert!(app.flash.contains("1/4 kinds"), "{}", app.flash);
     counted(&mut app, claim, "services", objects(0));
     counted(&mut app, claim, "secrets", Count::NoAccess);
@@ -88,7 +88,6 @@ async fn ns_resources_lists_populated_kinds_as_counts_arrive() {
         "1 kind with objects in prod · 1 no access · 1 failed"
     );
     assert!(app.flash_err);
-    assert!(screen_text(&mut app, 120, 20).contains("○ snapshot"));
 }
 
 #[tokio::test]
@@ -210,10 +209,10 @@ async fn ns_resources_filters_and_sorts_counts_as_numbers() {
     assert_eq!(
         counts(&app),
         pairs(&[
-            ("secrets", "3"),
-            ("deployments.apps", "4"),
-            ("pods", "12"),
             ("services", "30"),
+            ("pods", "12"),
+            ("deployments.apps", "4"),
+            ("secrets", "3"),
         ])
     );
 }

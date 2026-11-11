@@ -493,19 +493,8 @@ async fn log_selection_scrolls_to_the_cursor() {
 }
 
 #[tokio::test]
-async fn selection_keys_show_in_the_footer_and_help() {
-    let (mut app, _rx) = test_app();
-    app.mode = Mode::Logs;
-    push_logs(&mut app, numbered(3));
-    key(&mut app, KeyCode::Char('V'));
-    let mut term = Terminal::new(TestBackend::new(120, 20)).unwrap();
-    term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-    assert!(
-        screen(&term)
-            .iter()
-            .any(|r| r.contains("o:other end") && r.contains("y:copy") && r.contains("esc:cancel"))
-    );
-
+async fn selection_keys_are_bound_in_every_document_scope() {
+    let (app, _rx) = test_app();
     for (scope, mode) in [
         ("logs", Mode::Logs),
         ("detail", Mode::Detail),

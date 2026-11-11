@@ -774,6 +774,11 @@ impl ViewSpec {
         }
     }
 
+    /// The header of the column whose value tints the row.
+    pub fn status_header(&self) -> Option<&str> {
+        Some(&self.columns.get(self.status_idx?)?.header)
+    }
+
     pub fn canonical_header(&self, idx: usize) -> Option<&str> {
         if self.metric_at(idx).is_some() {
             return None;
@@ -1220,6 +1225,31 @@ impl WorkloadCounts {
             },
         }
     }
+}
+
+/// Whether a pod's Ready condition, or one of its readiness gates, is not yet True.
+pub fn pod_readiness_blocked(obj: &DynamicObject) -> bool {
+    let conditions = obj
+        .data
+        .pointer("/status/conditions")
+        .and_then(serde_json::Value::as_array);
+    let condition = |name: &str| {
+        conditions
+            .and_then(|conditions| conditions.iter().find(|c| c["type"].as_str() == Some(name)))
+    };
+    condition("Ready").is_some_and(|c| c["status"].as_str() != Some("True"))
+        || obj
+            .data
+            .pointer("/spec/readinessGates")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|gates| {
+                gates.iter().any(|gate| {
+                    gate["conditionType"]
+                        .as_str()
+                        .and_then(condition)
+                        .is_none_or(|c| c["status"].as_str() != Some("True"))
+                })
+            })
 }
 
 /// Rollout-health summary for workload kinds, derived from the object's own
