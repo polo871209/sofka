@@ -1,9 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["local>nklmilojevic/renovate-config", "helpers:pinGitHubActionDigests"],
-  "nix": {
-    "enabled": true
-  },
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": ["before 4am on monday"]
@@ -20,13 +17,8 @@
       "separateMajorMinor": false
     },
     {
-      "matchManagers": ["nix"],
-      "groupName": "nix dependencies",
-      "separateMinorPatch": false
-    },
-    {
-      "description": "The workflows hold the package signing keys and the tap token, and run the setup-nix composite action: Action updates are reviewed, never merged automatically.",
-      "matchFileNames": [".github/workflows/**", ".github/actions/**"],
+      "description": "The workflows publish the release: Action updates are reviewed, never merged automatically.",
+      "matchFileNames": [".github/workflows/**"],
       "automerge": false
     }
   ]

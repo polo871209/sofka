@@ -1,5 +1,0 @@
-readonly = true
-default_namespace = "from-file"
-
-[skin]
-name = "nord"

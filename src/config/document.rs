@@ -158,7 +158,6 @@ mod tests {
             include_str!("../../docs/safety.md"),
             include_str!("../../docs/debugging.md"),
             include_str!("../../docs/plugins.md"),
-            include_str!("../../nix/tests/config.toml"),
         ] {
             let examples: Vec<_> = if doc.contains("```toml\n") {
                 doc.split("```toml\n")

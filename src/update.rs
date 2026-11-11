@@ -1,7 +1,7 @@
 //! Release update checks: is a newer sofka published, and how would this
 //! install upgrade to it.
 //!
-//! sofka never downloads or replaces itself. Homebrew, Nix, Cargo, winget, Scoop,
+//! sofka never downloads or replaces itself. Homebrew, Cargo, winget, Scoop,
 //! and the distro packages each track the installed binary, so the check only
 //! reports the latest release and the upgrade command for the install method
 //! the running executable came from. The background check runs at most once
@@ -161,7 +161,6 @@ where
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallMethod {
     Homebrew,
-    Nix,
     Cargo,
     Winget,
     Scoop,
@@ -194,9 +193,7 @@ impl InstallMethod {
                     .to_ascii_lowercase();
                 format!("{}/apps/sofka/", root.trim_end_matches('/'))
             });
-        if path.starts_with("/nix/store/") {
-            Self::Nix
-        } else if path.contains("/Cellar/") || path.contains("/linuxbrew/") {
+        if path.contains("/Cellar/") || path.contains("/linuxbrew/") {
             Self::Homebrew
         } else if lower.contains("/microsoft/winget/") {
             Self::Winget
@@ -221,7 +218,6 @@ impl InstallMethod {
     pub fn upgrade_hint(self, release: &Release) -> String {
         match self {
             Self::Homebrew => "brew upgrade sofka".into(),
-            Self::Nix => "update the sofka flake input or Nix profile".into(),
             Self::Cargo => "cargo install sofka --locked".into(),
             Self::Winget => "winget upgrade nklmilojevic.sofka".into(),
             Self::Scoop => "scoop update; scoop update sofka".into(),
@@ -432,10 +428,6 @@ mod tests {
         assert_eq!(
             detect("/home/linuxbrew/.linuxbrew/bin/sofka"),
             InstallMethod::Homebrew
-        );
-        assert_eq!(
-            detect("/nix/store/abc-sofka-0.31.1/bin/sofka"),
-            InstallMethod::Nix
         );
         assert_eq!(detect("/home/me/.cargo/bin/sofka"), InstallMethod::Cargo);
         assert_eq!(

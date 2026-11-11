@@ -1,0 +1,12 @@
+[tools]
+# CI uses stable with these components (.github/workflows/ci.yaml).
+# The git hooks run cargo, and nothing else on PATH provides it.
+rust = { version = "stable", components = "clippy,rustfmt,llvm-tools-preview" }
+lefthook = "latest"
+"npm:oxfmt" = "latest"
+zizmor = "latest"
+# Same version CI installs for the coverage job.
+"aqua:taiki-e/cargo-llvm-cov" = "0.9.1"
+
+[env]
+_.path = ["{{config_root}}/scripts/bin"]
