@@ -276,9 +276,9 @@ async fn nodepool_columns_show_usage_against_limits_in_text() {
             "AGE"
         ]
     );
-    // The first row takes the cursor bar, so the capped pool sorts second.
+    let row = |name: &str| rows.iter().find(|row| row[0] == name).unwrap();
     assert_eq!(
-        rows[1][..7],
+        row("tight")[..7],
         [
             "tight",
             "default",
@@ -291,11 +291,11 @@ async fn nodepool_columns_show_usage_against_limits_in_text() {
     );
     // No limit: the amount alone, never a percentage of nothing.
     assert_eq!(
-        rows[0][..7],
+        row("open")[..7],
         ["open", "spot", "2", "1.5", "512Mi", "", "False"]
     );
     assert_eq!(
-        rows[2][..7],
+        row("zero")[..7],
         ["zero", "", "0", "0/0 (100%)", "0", "", "Unknown"]
     );
 
@@ -312,7 +312,7 @@ async fn nodepool_columns_show_usage_against_limits_in_text() {
 
     // CPU sorts by the amount used, not the text.
     select_sort_with_keys(&mut app, "CPU");
-    assert_eq!(row_names(&app), ["zero", "open", "tight"]);
+    assert_eq!(row_names(&app), ["tight", "open", "zero"]);
 }
 
 #[tokio::test]
@@ -359,8 +359,9 @@ async fn nodeclaim_columns_show_placement_and_disruption_in_text() {
             "AGE"
         ]
     );
+    let row = |name: &str| rows.iter().find(|row| row[0] == name).unwrap();
     assert_eq!(
-        rows[0][..9],
+        row("default-abc")[..9],
         [
             "default-abc",
             "default",
@@ -374,7 +375,7 @@ async fn nodeclaim_columns_show_placement_and_disruption_in_text() {
         ]
     );
     assert_eq!(
-        rows[1][..9],
+        row("default-def")[..9],
         [
             "default-def",
             "",
@@ -443,7 +444,7 @@ async fn nodepool_usage_sorts_by_the_raw_quantity_not_the_rounded_cell() {
     assert_eq!(rows[0][memory], rows[1][memory]);
 
     select_sort_with_keys(&mut app, "CPU");
-    assert_eq!(row_names(&app), ["b-less", "a-more"]);
+    assert_eq!(row_names(&app), ["a-more", "b-less"]);
     select_sort_with_keys(&mut app, "MEMORY");
-    assert_eq!(row_names(&app), ["b-less", "a-more"]);
+    assert_eq!(row_names(&app), ["a-more", "b-less"]);
 }

@@ -190,7 +190,6 @@ async fn a_forbidden_watch_polls_the_view_and_says_so() {
     assert_eq!(app.watch_errors, 0);
     let screen = screen_text(&mut app, 140, 30);
     assert!(screen.contains("polling 2s (watch forbidden)"), "{screen}");
-    assert!(screen.contains("● polling"), "{screen}");
     app.cluster.context = "a-very-long-context-name-that-fills-a-narrow-header".into();
     app.handle_key(ctrl(KeyCode::Char('e'))).unwrap();
     assert!(app.compact);

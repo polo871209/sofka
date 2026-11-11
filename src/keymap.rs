@@ -124,6 +124,7 @@ actions! {
     Refresh => ("refresh", "refresh"),
     Rename => ("rename", "rename"),
     RestartOrRefresh => ("restart_or_refresh", "restart, sync, rollback, or refresh"),
+    RolloutHistory => ("rollout_history", "rollout history and rollback"),
     Right => ("right", "right"),
     Save => ("save", "save"),
     SelectLines => ("select_lines", "start or cancel a line selection"),
@@ -141,6 +142,7 @@ actions! {
     Json => ("json", "JSON view: raw/record/pretty"),
     Timestamps => ("timestamps", "timestamps"),
     Toggle => ("toggle", "toggle"),
+    ToggleCompleted => ("toggle_completed", "show or hide completed pods"),
     Transfer => ("transfer", "transfer"),
     Uncordon => ("uncordon", "uncordon"),
     Up => ("up", "up"),
@@ -166,7 +168,7 @@ impl Action {
     /// its key goes to bookmarks, workspaces, and plugins first.
     pub fn kinds(self) -> Option<&'static [&'static str]> {
         match self {
-            Self::Attach | Self::PreviousLogs => Some(&["pods"]),
+            Self::Attach | Self::PreviousLogs | Self::ToggleCompleted => Some(&["pods"]),
             Self::Faults => Some(&[
                 "workloads",
                 "pods",
@@ -196,6 +198,7 @@ impl Action {
             Self::Approve | Self::Deny => Some(&["certificatesigningrequests"]),
             Self::ToggleOwned => Some(&["workloads"]),
             Self::NsResources => Some(&["namespaces"]),
+            Self::RolloutHistory => Some(&["deployments", "statefulsets", "daemonsets"]),
             Self::SetImage => Some(&[
                 "pods",
                 "deployments",
@@ -691,6 +694,7 @@ const DEFAULTS: &[(&str, Action, &[&str])] = &[
     ("table", Action::ProviderLogs, &["L"]),
     ("table", Action::Refresh, &["ctrl-r"]),
     ("table", Action::RestartOrRefresh, &["r"]),
+    ("table", Action::RolloutHistory, &["ctrl-u"]),
     ("table", Action::Right, &["right"]),
     ("table", Action::SetImage, &["i"]),
     ("table", Action::ShellOrScale, &["s"]),
@@ -698,6 +702,7 @@ const DEFAULTS: &[(&str, Action, &[&str])] = &[
     ("table", Action::SortAge, &["A"]),
     ("table", Action::Timeline, &["T"]),
     ("table", Action::ToggleOwned, &["O"]),
+    ("table", Action::ToggleCompleted, &["h"]),
     ("table", Action::Uncordon, &["U"]),
     ("table", Action::Up, &["k", "up"]),
     ("table", Action::Wide, &["w"]),
@@ -1295,7 +1300,11 @@ mod tests {
         assert!(errors.contains("ctrl-d"), "{errors}");
         assert!(errors.contains("delete"), "{errors}");
         assert!(errors.contains("page_down"), "{errors}");
-        let map = compile(&format!("{text}\n[keys.table]\ndelete = 'alt-d'\n")).unwrap();
+        assert!(errors.contains("rollout_history"), "{errors}");
+        let map = compile(&format!(
+            "{text}\n[keys.table]\ndelete = 'alt-d'\nrollout_history = 'alt-u'\n"
+        ))
+        .unwrap();
         for scope in ["table", "detail", "diff", "events", "help", "logs"] {
             assert_eq!(
                 map.action(
@@ -1393,7 +1402,8 @@ mod tests {
                 "{text}"
             );
         }
-        let map = compile("[keys.table]\npage_up = ['ctrl-u', 'control-U']").unwrap();
+        let map = compile("[keys.table]\npage_up = ['ctrl-u', 'control-U']\nrollout_history = []")
+            .unwrap();
         assert_eq!(map.chords("table", Action::PageUp).len(), 1);
     }
 

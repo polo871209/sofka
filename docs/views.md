@@ -388,7 +388,11 @@ The selected layout does not inherit columns, `replace`, or `sort` from
 another resource key. If it has no `sort`, `[views."*"].sort` supplies the
 global default. The `"*"` key supports only the default sort; it does not
 supply columns or navigation settings. A table without the specified column
-ignores the global sort until that column is available. The default sort is
+ignores the global sort until that column is available. With no configured
+sort, a table with a STATUS column sorts by status: failures first, then
+pending, terminating, unknown and healthy rows, and finished rows last. Helm
+history keeps revision order. The `ns/name` entry in the `S` picker clears the
+sort for the active view. The default sort is
 checked again when CRD printer columns arrive or wide mode changes. A saved
 sort can replace a configured default when its column becomes available.
 An active user or bookmark sort keeps its priority. Columns still overlay the built-in layout unless

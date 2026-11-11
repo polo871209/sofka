@@ -105,7 +105,6 @@ async fn tf_lists_terraforms_with_revision_and_pending_plan() {
     assert_eq!(
         cells,
         [
-            cell("a-applied", "True", "false", "main@sha1:abc", ""),
             cell("b-planned", "Unknown", "false", "", "plan-main-def"),
             cell(
                 "c-destroy",
@@ -114,6 +113,7 @@ async fn tf_lists_terraforms_with_revision_and_pending_plan() {
                 "",
                 "plan-main-0a1 (destroy)"
             ),
+            cell("a-applied", "True", "false", "main@sha1:abc", ""),
         ]
     );
     let screen = screen_text(&mut app, 200, 20);

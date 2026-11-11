@@ -420,7 +420,7 @@ mod tests {
             );
             assert_eq!(
                 crate::sortmem::SortMemory::load(&sort_path).get("pods"),
-                Some(("AGE".into(), false))
+                Some(("AGE".into(), true))
             );
 
             let mut namespaces = crate::nsmem::NamespaceMemory::load(&namespace_path);
@@ -448,7 +448,7 @@ mod tests {
             assert_eq!(saved.get("other"), Some(String::new()));
             let saved = crate::sortmem::SortMemory::load(&sort_path);
             assert_eq!(saved.get("pods"), Some(("NAME".into(), false)));
-            assert_eq!(saved.get("deployments"), Some(("AGE".into(), false)));
+            assert_eq!(saved.get("deployments"), Some(("AGE".into(), true)));
             std::fs::remove_dir_all(dir).unwrap();
         }
     }
@@ -462,6 +462,11 @@ mod tests {
     fn choose_sort(app: &mut crate::app::App, header: &str) {
         use crossterm::event::KeyCode;
         press(app, KeyCode::Char('S'));
+        if header.is_empty() {
+            for _ in 0..app.sort_picker_state.selected().unwrap_or(0) {
+                press(app, KeyCode::Up);
+            }
+        }
         for key in header.chars() {
             press(app, KeyCode::Char(key));
         }
@@ -539,11 +544,11 @@ mod tests {
                     if clear {
                         None
                     } else {
-                        Some(("AGE".into(), false))
+                        Some(("AGE".into(), true))
                     },
                     "{mode}"
                 );
-                assert_eq!(saved.get("deployments"), Some(("AGE".into(), false)));
+                assert_eq!(saved.get("deployments"), Some(("AGE".into(), true)));
                 assert_eq!(saved.get("nodes"), Some(("CPU".into(), false)));
                 std::fs::remove_dir_all(dir).unwrap();
             }

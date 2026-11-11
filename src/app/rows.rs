@@ -71,6 +71,9 @@ impl App {
         if self.faults_filter_active() && !self.row_has_faults(o) {
             return false;
         }
+        if self.completed_hidden() && pod_succeeded(o) {
+            return false;
+        }
         if self.filter.is_empty() {
             return true;
         }
@@ -110,6 +113,39 @@ impl App {
         } else {
             crate::columns::object_faulted(group, plural, o).unwrap_or(true)
         }
+    }
+
+    /// Whether the table hides Succeeded pods. Only the full pod list hides
+    /// them, because a drilled list such as job → pods exists to show them.
+    pub fn completed_hidden(&self) -> bool {
+        self.completed_toggle_available() && !self.show_completed
+    }
+
+    pub fn completed_toggle_available(&self) -> bool {
+        self.kind_plural == "pods" && self.scope_label.is_none()
+    }
+
+    pub(super) fn toggle_completed(&mut self) {
+        if self.kind_plural != "pods" {
+            self.flash_warn("completed pod toggle applies to pods");
+            return;
+        }
+        if !self.completed_toggle_available() {
+            self.flash_warn("drilled pod lists always show completed pods");
+            return;
+        }
+        let selected = self.selected_ref().map(crate::store::row_key);
+        self.show_completed = !self.show_completed;
+        self.invalidate_rows();
+        self.ensure_rows_cache();
+        let index = selected.and_then(|key| {
+            self.rows_cache
+                .borrow()
+                .keys
+                .iter()
+                .position(|k| k.as_ref() == key)
+        });
+        self.table_state.select(Some(index.unwrap_or(0)));
     }
 
     fn eval_filter(
@@ -611,6 +647,7 @@ impl App {
         } = &mut *cache;
         let helm_latest = helm_latest.as_ref().map(|(_, keys)| keys);
 
+        let status_sort = sort_header.is_some() && sort_header == self.spec.status_header();
         // (primary sort key, (ns, name) tiebreak, store key)
         let empty_sort: Rc<str> = Rc::from("");
         let mut entries: Vec<(SortKey, (&str, &str), &RowKey)> =
@@ -634,6 +671,16 @@ impl App {
             // their cells.
             let primary = match sort_header {
                 None => SortKey::Text(empty_sort.clone()),
+                // The rendered row cells already hold the status, and helm
+                // views pay a release decode to build them, so share them.
+                Some(_) if status_sort => {
+                    let entry = self.cell_entry(k, o, cells, now);
+                    let status = entry
+                        .status_idx
+                        .and_then(|i| entry.cells.get(i))
+                        .map_or("", String::as_str);
+                    self.status_sort_key(o, status)
+                }
                 Some(h) if volatile_sort => self.column_sort_key(o, h, now),
                 Some(h) => {
                     let rv = o.metadata.resource_version.as_deref();
@@ -1045,36 +1092,55 @@ impl App {
         )
     }
 
-    /// Apply a view's configured initial sort, unless a sort is already
-    /// active (a refresh must not clobber the user's choice).
+    /// Apply a view's configured initial sort, or the status sort when none is
+    /// configured. A user or bookmark sort keeps priority, so a refresh never
+    /// clobbers the user's choice.
     pub(super) fn apply_view_sort(&mut self) {
-        if self.sort_column.is_some()
-            || matches!(
-                self.sort_origin,
-                SortOrigin::Selected { .. } | SortOrigin::Cleared
-            )
+        if matches!(
+            self.sort_origin,
+            SortOrigin::Selected { .. } | SortOrigin::Cleared
+        ) || (self.sort_column.is_some() && self.sort_origin != SortOrigin::Configured)
         {
             return;
         }
         let specific_sort = self.active_user_view().and_then(|v| v.sort.clone());
         let is_specific = specific_sort.is_some();
-        let Some((header, desc)) =
+        if let Some((header, desc)) =
             specific_sort.or_else(|| self.user_views.get("*").and_then(|v| v.sort.clone()))
-        else {
-            return;
-        };
-        match self.display_headers().iter().position(|h| *h == header) {
-            Some(i) => {
+        {
+            if let Some(i) = self.display_headers().iter().position(|h| *h == header) {
                 self.sort_column = Some(i);
                 self.sort_desc = desc;
                 self.sort_origin = SortOrigin::Configured;
                 self.invalidate_rows();
+                return;
             }
-            None if is_specific => {
+            if is_specific {
                 self.flash_warn(&format!("view sort column '{header}' not found"));
             }
-            None => {}
         }
+        self.apply_status_sort();
+    }
+
+    /// With no configured sort, order rows by status so failing rows come
+    /// first. Helm history keeps revision order.
+    fn apply_status_sort(&mut self) {
+        let status = self
+            .spec
+            .status_header()
+            .filter(|_| self.kind_plural != "helmhistory")
+            .and_then(|status| self.display_headers().iter().position(|h| h == status));
+        match status {
+            Some(i) => {
+                self.sort_column = Some(i);
+                self.sort_desc = false;
+                self.sort_origin = SortOrigin::Configured;
+            }
+            // A configured sort that the reloaded config no longer names.
+            None if self.sort_origin == SortOrigin::Configured => self.reset_sort(),
+            None => return,
+        }
+        self.invalidate_rows();
     }
 
     /// Toggle wide mode (`w`): show/hide wide-only columns.
@@ -1114,13 +1180,19 @@ impl App {
 
     /// Latest (cpu_millicores, mem_bytes) for an object from the metrics map.
     pub(crate) fn metrics_for(&self, o: &DynamicObject) -> Option<(i64, i64)> {
-        let name = o.metadata.name.clone().unwrap_or_default();
-        let key = if self.kind_plural == "pods" {
-            format!("{}/{}", o.metadata.namespace.as_deref().unwrap_or(""), name)
-        } else {
-            name
-        };
-        self.metrics.get(&key).copied()
+        let name = o.metadata.name.as_deref().unwrap_or_default();
+        if self.kind_plural != "pods" {
+            return self.metrics.get(name).copied();
+        }
+        // Runs twice per metric cell per visible row per frame, so reuse one key buffer.
+        thread_local!(static KEY: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) });
+        KEY.with_borrow_mut(|key| {
+            key.clear();
+            key.push_str(o.metadata.namespace.as_deref().unwrap_or_default());
+            key.push('/');
+            key.push_str(name);
+            self.metrics.get(key.as_str()).copied()
+        })
     }
 
     pub(crate) fn metric_value(
@@ -1162,6 +1234,20 @@ impl App {
             Some(n) => n.to_string(),
             None => "-".into(),
         }
+    }
+
+    /// Sort key for a status cell: the rank of the status that tints the row.
+    fn status_sort_key(&self, o: &DynamicObject, status: &str) -> SortKey {
+        // A Running pod that is not ready yet is tinted, and ranked, as still starting.
+        let tint = if status == "Running"
+            && self.kind_plural == "pods"
+            && crate::columns::pod_readiness_blocked(o)
+        {
+            "PodInitializing"
+        } else {
+            status
+        };
+        SortKey::Status(crate::theme::status_rank(tint), status.into())
     }
 
     /// Comparable value of `header`'s cell for object `o`.
@@ -1602,6 +1688,10 @@ impl App {
         let half = Action::HalfPageDown.page_size(self.table_page_rows) as i32;
         self.move_selection(pages.saturating_mul(half));
     }
+}
+
+pub(super) fn pod_succeeded(o: &DynamicObject) -> bool {
+    o.data.pointer("/status/phase").and_then(Value::as_str) == Some("Succeeded")
 }
 
 fn pod_has_faults(o: &DynamicObject) -> bool {

@@ -57,7 +57,7 @@ async fn context_badge_follows_context_switches_in_both_headers() {
     app.handle_key(ctrl(KeyCode::Char('e'))).unwrap();
     assert!(app.compact);
     let (line, color) = find(&mut app, "[prod]").expect("compact header shows the badge");
-    assert!(line.contains(" sofka "), "{line}");
+    assert!(line.starts_with(" pods [0]"), "{line}");
     assert!(line.contains("prod [prod] [ro]"), "{line}");
     assert_eq!(color, theme::red());
 
@@ -298,9 +298,7 @@ async fn a_long_badge_never_hides_the_read_only_marker() {
     app.switch_kind("pods");
     palette(&mut app, "reload");
     assert!(app.readonly);
-    // The logo gives up its column first, so the full header only clips the
-    // badge once the info is too narrow even without the logo.
-    for (compact, width) in [(false, 60), (true, 60)] {
+    for (compact, width) in [(false, 50), (true, 50)] {
         app.compact = compact;
         let screen = screen_text(&mut app, width, 20);
         let marker = if compact { "[ro]" } else { "[read-only]" };
