@@ -280,6 +280,43 @@ pub fn faults_pods_app(n: usize) -> (App, Receiver<Msg>) {
     (app, rx)
 }
 
+/// A following logs view whose buffer already holds `cap` lines, so each new
+/// batch trims the front: the steady state of a busy pod after a few seconds.
+pub fn full_logs_app(cap: usize) -> (App, Receiver<Msg>) {
+    let (mut a, rx) = app();
+    a.logs_cfg.buffer = cap;
+    feed_logs(&mut a, kubelet_lines(0, cap));
+    (a, rx)
+}
+
+/// Lines `start..start + n` of one container's stream, each with the
+/// kubelet timestamp prefix in increasing order, as the log request returns them.
+pub fn kubelet_lines(start: usize, n: usize) -> Vec<String> {
+    log_lines(n)
+        .into_iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let t = start + i;
+            format!(
+                "2026-08-30T{:02}:{:02}:{:02}.{:06}Z {line}",
+                t / 3_600_000 % 24,
+                t / 60_000 % 60,
+                t / 1_000 % 60,
+                t % 1_000
+            )
+        })
+        .collect()
+}
+
+/// One log batch through the real message path.
+pub fn feed_logs(app: &mut App, lines: Vec<String>) {
+    // A fresh App streams under log generation 0.
+    app.handle_msg(Msg::LogLines {
+        generation: 0,
+        lines,
+    });
+}
+
 /// A store-shaped object map of `n` pods — what one entry of the view cache
 /// holds. Used by the memory probe to price a view snapshot directly, without
 /// driving navigation (which would spawn watches).
