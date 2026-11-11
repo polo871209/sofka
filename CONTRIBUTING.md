@@ -22,9 +22,9 @@ A feature issue or pull request does not replace this discussion.
 Bug reports and bug fix pull requests do not need a discussion first. Search
 the existing issues and pull requests for the same problem before you start.
 
-Use the [bug report form](https://github.com/nklmilojevic/sofka/issues/new?template=bug_report.yml).
+[Open an issue](https://github.com/nklmilojevic/sofka/issues/new).
 Include steps to reproduce the problem, the expected result, and the actual
-result. Add the requested system details and output from `sofka info`. Use
+result. Add your operating system, terminal, and the output from `sofka info`. Use
 `sofka info --offline` if you cannot connect to the cluster. Check the report
 for private information before you share it.
 
@@ -33,10 +33,8 @@ for private information before you share it.
 Fork the repository, clone your fork, and create a branch from `main`.
 The project uses Rust edition 2024 and tests with stable Rust in CI.
 
-Use `nix develop` to enter the development environment. It includes Rust, Cargo,
-Clippy, rustfmt, CMake, just, lefthook, and the other project tools. Without Nix,
-install these tools yourself. The hooks also use `oxfmt` for Markdown and YAML,
-`nixpkgs-fmt` for Nix, and `zizmor` for GitHub Actions.
+Install Rust, Cargo, Clippy, rustfmt, CMake, just, and lefthook. The hooks also
+use `oxfmt` for Markdown and YAML, and `zizmor` for GitHub Actions.
 
 Install the Git hooks once after cloning:
 
@@ -97,7 +95,6 @@ missing tests.
   must also pass before the pull request is ready.
 - Do not edit `Cargo.lock` by hand. If a manifest change requires a lockfile
   update, generate it with Cargo and include it. Renovate manages dependency bumps.
-- Do not change the release version in a feature pull request.
 
 ## Use of coding agents
 

@@ -119,8 +119,8 @@ commands in the package. Catalog schema 2 can contain both old release records
 and new releases with command arrays. Sofka still accepts catalog schema 1 and
 old installed packages. Older Sofka clients cannot read catalog schema 2.
 
-Home Manager users can continue to place immutable package sources in the same
-directory. Sofka reports those as manual packages and does not take ownership
+You can continue to place immutable package sources in the same directory by
+hand or with another tool. Sofka reports those as manual packages and does not take ownership
 of them. Since `plugin` is now a CLI command, use `sofka --resource plugin` to
 open a Kubernetes resource whose name is exactly `plugin`.
 

@@ -933,11 +933,11 @@ fn verify_artifact(artifact: &Artifact, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// BLAKE3 over the whole slice, using every core. Artifacts run to tens of
-/// megabytes and this is the only work between download and install.
+/// BLAKE3 over the whole slice on one core: 50 MB takes about 23 ms, so a
+/// thread pool is not worth its dependency.
 pub fn digest(bytes: &[u8]) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update_rayon(bytes);
+    hasher.update(bytes);
     hex(hasher.finalize().as_bytes())
 }
 
