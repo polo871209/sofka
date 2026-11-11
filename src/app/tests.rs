@@ -23706,6 +23706,63 @@ async fn log_index_rebuilds_when_the_buffer_is_trimmed_or_cleared() {
     assert_eq!(logs.index().total_rows(), 0);
 }
 
+/// The incremental index after trims and out-of-order inserts must equal a
+/// rebuild from scratch, markers included.
+fn assert_index_matches_rebuild(logs: &mut LogsView, wrap_width: usize, what: &str) {
+    let idx = logs.refresh_index(wrap_width);
+    let got = (idx.shown.clone(), idx.ends.clone(), idx.total_rows());
+    logs.reset_index();
+    let idx = logs.refresh_index(wrap_width);
+    let want = (idx.shown.clone(), idx.ends.clone(), idx.total_rows());
+    assert_eq!(got, want, "index diverged from a rebuild after {what}");
+}
+
+#[tokio::test]
+async fn log_index_stays_exact_across_trims_markers_and_late_lines() {
+    for (filter, wrap) in [("", 0usize), ("keep", 0), ("keep", 12)] {
+        let (mut app, _rx) = test_app();
+        app.mode = Mode::Logs;
+        app.logs_cfg.buffer = 25;
+        app.logs.set_filter(filter.into());
+        let mut second = 0u32;
+        for batch in 0..12 {
+            let lines = (0..7)
+                .map(|i| {
+                    second += 1;
+                    let word = if i % 3 == 0 { "drop" } else { "keep" };
+                    format!(
+                        "[a] 2026-09-10T10:{:02}:{:02}Z {word} batch {batch} line {i}",
+                        second / 60,
+                        second % 60
+                    )
+                })
+                .collect();
+            shortcut_log_lines(&mut app, lines);
+            assert_index_matches_rebuild(&mut app.logs, wrap, "a trimmed batch");
+            if batch % 3 == 0 {
+                app.handle_key(press(KeyCode::Char('m'))).unwrap();
+                assert_index_matches_rebuild(&mut app.logs, wrap, "a marker");
+            }
+            // A late line from another container sorts into the middle.
+            let late = second.saturating_sub(4);
+            shortcut_log_lines(
+                &mut app,
+                vec![format!(
+                    "[b] 2026-09-10T10:{:02}:{:02}Z keep late {batch}",
+                    late / 60,
+                    late % 60
+                )],
+            );
+            assert_index_matches_rebuild(&mut app.logs, wrap, "a late line");
+        }
+        assert_eq!(app.logs.view.lines.len(), 25);
+        assert!(
+            app.logs.index().shown.contains(&None),
+            "markers survive trims"
+        );
+    }
+}
+
 #[tokio::test]
 async fn launching_logs_invalidates_the_previous_buffers_index() {
     let (mut app, _rx) = test_app();

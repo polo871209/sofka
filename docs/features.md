@@ -159,7 +159,7 @@ include those conditions. Row filters can search the route paths.
 - **Container trends** show CPU and memory for the selected container on wide
   screens. Each chart covers the last five minutes in five-second bins, with
   the newest sample on the right. The scale is zero to the largest visible
-  value. A dot marks a missing sample; measured zero has an empty bar.
+  value. A bin between two polls repeats the earlier sample for up to 60 seconds. A dot marks a failed poll or a longer gap. Measured zero has an empty bar.
   History starts while the container is selected and keeps at most 60 samples.
   It clears on a selection or view change, context change, or pod replacement.
   It uses the existing metrics polls and is not saved between sessions.
@@ -543,6 +543,7 @@ include those conditions. Row filters can search the route paths.
   Measured zero shows `0m`, `0Mi`, or `0%`. Missing metric values sort before
   measured values in ascending order and after them in descending order.
   All of it degrades cleanly when metrics-server isn't installed.
+  sofka reads the newest sample `timestamp` to learn how often metrics-server publishes (15 s upstream, 30 s on GKE). It polls once just before each sample is due and once more 2 s later if the sample is late, instead of every 5 seconds. Until it has seen a sample change, and when metrics-server stops publishing, it polls every 5 seconds.
 - **Configurable thresholds** for the RESTARTS/CPU/MEM/request-limit coloring,
   globally and per resource and per context. See
   [Views and thresholds](views.md#thresholds).

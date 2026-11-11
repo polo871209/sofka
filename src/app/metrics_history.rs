@@ -6,6 +6,10 @@ const SAMPLES: usize = 60;
 const BIN_SECONDS: u64 = 5;
 const NODE_BINS: u64 = 12;
 const NODE_BIN_SECONDS: u64 = 25;
+// Polls follow the metrics-server period, up to 60 s apart, so a bin with no
+// poll shows the last sample instead of a gap.
+const HOLD_BINS: u64 = 60 / BIN_SECONDS;
+const NODE_HOLD_BINS: u64 = 60 / NODE_BIN_SECONDS;
 const TREND_LEVELS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -46,12 +50,29 @@ impl ContainerHistory {
 
     fn bars(&self, now: Instant, cpu: bool) -> [Option<u64>; SAMPLES] {
         let mut bars = [None; SAMPLES];
-        for (time, value) in &self.samples {
-            let age = now.saturating_duration_since(*time).as_secs() / BIN_SECONDS;
-            if age < SAMPLES as u64 {
-                bars[SAMPLES - 1 - age as usize] = value
-                    .map(|(c, m)| if cpu { c } else { m })
-                    .and_then(|v| u64::try_from(v).ok());
+        let ages: Vec<u64> = self
+            .samples
+            .iter()
+            .map(|(time, _)| now.saturating_duration_since(*time).as_secs() / BIN_SECONDS)
+            .collect();
+        for (i, (_, value)) in self.samples.iter().enumerate() {
+            let age = ages[i];
+            if age >= SAMPLES as u64 {
+                continue;
+            }
+            let value = value
+                .map(|(c, m)| if cpu { c } else { m })
+                .and_then(|v| u64::try_from(v).ok());
+            bars[SAMPLES - 1 - age as usize] = value;
+            if value.is_none() {
+                continue;
+            }
+            let next = ages.get(i + 1).copied();
+            for newer in (age.saturating_sub(HOLD_BINS)..age).rev() {
+                if next.is_some_and(|n| newer <= n) {
+                    break;
+                }
+                bars[SAMPLES - 1 - newer as usize] = value;
             }
         }
         bars
@@ -131,8 +152,12 @@ impl NodeHistory {
         (0..NODE_BINS)
             .map(|i| {
                 let wanted = (bin + i + 1).checked_sub(NODE_BINS);
-                bins.iter()
-                    .find(|(b, _)| Some(*b) == wanted)
+                wanted
+                    .and_then(|w| {
+                        bins.iter()
+                            .rev()
+                            .find(|(b, _)| *b <= w && w - *b <= NODE_HOLD_BINS)
+                    })
                     .and_then(|(_, (c, m))| usage_pct(if cpu { *c } else { *m }, allocatable))
                     .map_or('·', |pct| {
                         TREND_LEVELS[((pct.clamp(0, 100) * 8 + 99) / 100) as usize]
@@ -251,6 +276,27 @@ mod tests {
     }
 
     #[test]
+    fn container_bars_hold_a_sample_until_the_next_poll() {
+        let mut history = ContainerHistory::default();
+        history.select(Some(TrendTarget {
+            generation: 1,
+            key: "ns/pod/app".into(),
+            uid: None,
+        }));
+        let start = Instant::now();
+        history.record(Some((10, 0)), start);
+        history.record(Some((20, 0)), start + Duration::from_secs(30));
+        let bars = history.bars(start + Duration::from_secs(35), true);
+        assert_eq!(bars[51], None);
+        assert_eq!(bars[52..58], [Some(10); 6]);
+        assert_eq!(bars[58..], [Some(20); 2]);
+        let bars = history.bars(start + Duration::from_secs(100), true);
+        assert_eq!(bars[39..45], [Some(10); 6]);
+        assert_eq!(bars[45..58], [Some(20); 13]);
+        assert_eq!(bars[58..], [None; 2]);
+    }
+
+    #[test]
     fn node_bins_keep_peaks_mark_gaps_and_expire() {
         let mut history = NodeHistory::default();
         let start = Instant::now();
@@ -258,30 +304,35 @@ mod tests {
         let sample = |cpu| [("node".to_string(), Some("a".to_string()), (cpu, 0))];
         history.record(1, sample(500), at(0));
         history.record(1, sample(1000), at(5));
-        history.record(1, sample(0), at(50));
+        // Up to 60 s without a poll holds the last value. Longer is a gap.
         assert_eq!(
-            history.cell("node", Some("a"), Some(1000), true, at(50)),
-            "·········█· "
+            history.cell("node", Some("a"), Some(1000), true, at(60)),
+            "·········███"
+        );
+        history.record(1, sample(0), at(100));
+        assert_eq!(
+            history.cell("node", Some("a"), Some(1000), true, at(100)),
+            "·······███· "
         );
         assert_eq!(
-            history.cell("node", Some("a"), None, true, at(50)),
+            history.cell("node", Some("a"), None, true, at(100)),
             "·".repeat(12)
         );
         assert_eq!(
-            history.cell("other", Some("a"), Some(1000), true, at(50)),
+            history.cell("other", Some("a"), Some(1000), true, at(100)),
             "·".repeat(12)
         );
         assert_eq!(
-            history.cell("node", Some("b"), Some(1000), true, at(50)),
+            history.cell("node", Some("b"), Some(1000), true, at(100)),
             "·".repeat(12)
         );
         history.record(
             1,
             [("node".to_string(), Some("b".to_string()), (1000, 0))],
-            at(55),
+            at(105),
         );
         assert_eq!(
-            history.cell("node", Some("b"), Some(1000), true, at(55)),
+            history.cell("node", Some("b"), Some(1000), true, at(105)),
             format!("{}█", "·".repeat(11))
         );
         history.record(1, sample(10), at(300));

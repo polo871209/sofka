@@ -1376,6 +1376,34 @@ impl LogIndex {
         self.ends.partition_point(|&end| (end as usize) <= row)
     }
 
+    /// Drop the entries of the first `lines` source lines and the first
+    /// `markers` markers, and shift the rest. A full follow buffer trims on
+    /// every batch, and a rebuild would re-match and re-measure every line.
+    fn drop_front(&mut self, lines: usize, markers: usize) {
+        let mut cut = 0;
+        let mut seen = 0;
+        while let Some(entry) = self.shown.get(cut) {
+            match entry {
+                Some(i) if (*i as usize) < lines => {}
+                None if seen < markers => seen += 1,
+                _ => break,
+            }
+            cut += 1;
+        }
+        let rows = cut.checked_sub(1).map_or(0, |last| self.ends[last]);
+        self.shown.drain(..cut);
+        self.ends.drain(..cut);
+        for i in self.shown.iter_mut().flatten() {
+            *i -= lines as u32;
+        }
+        for end in &mut self.ends {
+            *end -= rows;
+        }
+        self.total_rows -= rows as usize;
+        self.consumed -= lines;
+        self.consumed_markers -= markers;
+    }
+
     fn reset(&mut self, filter: &str, wrap_width: usize, revision: u64) {
         self.filter.clear();
         self.filter.push_str(filter);
@@ -1483,6 +1511,32 @@ impl LogsView {
             .reset(&self.filter, self.index.wrap_width, self.view.revision());
     }
 
+    /// Forget the index from source line `at` on, so the next refresh folds
+    /// in only the tail. Call before the markers after `at` shift.
+    fn truncate_index(&mut self, at: usize) {
+        let index = &mut self.index;
+        if index.revision != self.view.revision() {
+            return;
+        }
+        let stable = self.line_offset + at;
+        let mut cut = index.shown.len();
+        let mut marker = index.consumed_markers;
+        while let Some(&entry) = cut.checked_sub(1).and_then(|last| index.shown.get(last)) {
+            match entry {
+                Some(i) if i as usize >= at => {}
+                // Markers at `stable` are pushed again with the line at `at`.
+                None if self.markers[marker - 1] >= stable => marker -= 1,
+                _ => break,
+            }
+            cut -= 1;
+        }
+        index.shown.truncate(cut);
+        index.ends.truncate(cut);
+        index.total_rows = index.ends.last().map_or(0, |&end| end as usize);
+        index.consumed = index.consumed.min(at);
+        index.consumed_markers = marker;
+    }
+
     fn add_marker(&mut self, cap: usize) {
         self.markers
             .push_back(self.line_offset + self.view.lines.len());
@@ -1528,6 +1582,9 @@ impl LogsView {
         self.line_offset += count;
         self.clamp_selection();
         let removed_markers = self.markers.partition_point(|&pos| pos < self.line_offset);
+        let shift = self.index.revision == self.view.revision()
+            && self.index.consumed >= count
+            && self.index.consumed_markers >= removed_markers;
         if !self.follow {
             let rows: usize = self
                 .view
@@ -1545,7 +1602,12 @@ impl LogsView {
             self.json_budget = (self.json_budget + meta.json_charge).min(logs::JSON_CACHE_LIMIT);
         }
         self.view.drain_front(count);
-        self.reset_index();
+        if shift {
+            self.index.drop_front(count, removed_markers);
+            self.index.revision = self.view.revision();
+        } else {
+            self.reset_index();
+        }
     }
 
     /// Replace the filter text and recompile its matcher (substring / regex /
@@ -3216,6 +3278,7 @@ mod log_follow;
 pub use line_select::LineSelection;
 mod logs;
 pub use logs::{JsonView, RecordPart, RecordSpan};
+mod metrics_cadence;
 mod metrics_history;
 mod mouse;
 mod namespace_patterns;
